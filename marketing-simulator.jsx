@@ -310,17 +310,18 @@ function LearningCurve({ data, color }) {
 }
 
 // Réduction marginale du CPL mois après mois. La phase d'apprentissage
-// algorithmique elle-même dure ~2 à 6 semaines ; les gains des premiers mois
-// viennent surtout de l'optimisation continue (mots-clés/audiences/créas) et se
-// stabilisent à maturité. On retient un gain DURABLE prudent (~−25 % vs M1),
-// plutôt qu'une division par deux maintenue toute l'année (irréaliste).
+// algorithmique elle-même dure ~2 à 6 semaines ; les gains viennent surtout de
+// l'optimisation continue (mots-clés/audiences/créas) sur M2-M4, qui atteint
+// l'essentiel du gain DURABLE prudent (~−25 % vs M1) dès le 4ème mois. Au-delà,
+// l'optimisation continue mais ne rapporte plus que ~−1 %/mois, plutôt qu'une
+// division par deux maintenue toute l'année (irréaliste).
 const LEARNING_STEPS = [
   { label: "M1", mult: 1.0,  delta: null },
-  { label: "M2", mult: 0.92, delta: -8 },
-  { label: "M3", mult: 0.85, delta: -8 },
-  { label: "M4", mult: 0.78, delta: -8 },
-  { label: "M5", mult: 0.76, delta: -3 },
-  { label: "M6", mult: 0.75, delta: null },
+  { label: "M2", mult: 0.90, delta: -10 },
+  { label: "M3", mult: 0.80, delta: -11 },
+  { label: "M4", mult: 0.75, delta: -6 },
+  { label: "M5", mult: 0.74, delta: -1 },
+  { label: "M6", mult: 0.73, delta: -1 },
 ];
 // Seuil de signal en deçà duquel l'algorithme manque de conversions pour
 // optimiser : ~30 conv/mois (recommandation Google Smart Bidding ; Meta ~50/sem).
@@ -571,14 +572,29 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // Seuil de rentabilité : ROAS minimal pour que la marge couvre la dépense.
   const breakEvenRoas = effectiveMarge > 0 ? 100 / effectiveMarge : Infinity;
 
+  // ROI à maturité : le ROI net ci-dessus reflète le CPL du mois 1 (réglages
+  // actuels) ; celui-ci projette le même budget/objectif une fois le CPL
+  // stabilisé au palier d'apprentissage (LEARNING_STEPS[3] = mois 4), pour voir
+  // d'un coup d'œil l'écart entre "aujourd'hui" et "une fois l'algorithme optimisé".
+  const matureLm      = LEARNING_STEPS[3].mult;
+  const matureLeads   = mode === "budget" ? leads / matureLm : leads;
+  const matureSpend   = mode === "budget" ? spend : spend * matureLm;
+  const matureClients = biz.hasClosing ? matureLeads * closing / 100 : matureLeads;
+  const matureCA      = matureClients * clientValue;
+  const matureProfit  = matureCA * effectiveMarge / 100 - matureSpend;
+  const matureRoiPct  = matureSpend > 0 ? (matureProfit / matureSpend) * 100 : 0;
+
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
+  // Le tableau détaillé dérive des mêmes paliers que le graphique (LEARNING_STEPS)
+  // plutôt que de dupliquer les pourcentages, pour ne jamais désynchroniser les deux.
   const learningData = LEARNING_STEPS.map(s => ({ ...s, cpl: cpl * s.mult }));
-  const learningTable = [
-    { label: "Mois 1",      deltaLabel: `${biz.cplShort} de base`, isBase: true, cpl: cpl * 1.0 },
-    { label: "Mois 2",      deltaLabel: "−8%",                                    cpl: cpl * 0.92 },
-    { label: "Mois 3",      deltaLabel: "−8% suppl.",                             cpl: cpl * 0.85 },
-    { label: "Mois 4 et +", deltaLabel: "≈ −25% vs M1", tag: "maturité",          cpl: cpl * 0.75 },
-  ];
+  const learningTable = LEARNING_STEPS.map((s, i) => ({
+    label: `Mois ${i + 1}`,
+    deltaLabel: i === 0 ? `${biz.cplShort} de base` : `${s.delta < 0 ? "−" : ""}${Math.abs(s.delta ?? 0)}%`,
+    isBase: i === 0,
+    tag: i === 3 ? "maturité" : undefined,
+    cpl: cpl * s.mult,
+  }));
   // Signal insuffisant : trop peu de conversions pour que l'algorithme optimise,
   // auquel cas la baisse de CPL ci-dessus est peu probable.
   const lowSignal = leads > 0 && leads < MIN_SIGNAL_CONV;
@@ -1262,6 +1278,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ color: roiPct >= 0 ? "#4caf50" : ORANGE, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{roiPct >= 0 ? "+" : ""}{Math.round(roiPct)}%</div>
                 <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
                   {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {roiPct >= 0 ? "rentable" : "non rentable"}
+                </div>
+                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="ROI net une fois le CPL stabilisé au palier d'apprentissage (mois 4), à budget/objectif constant">
+                  ≈ {matureRoiPct >= 0 ? "+" : ""}{Math.round(matureRoiPct)}% à maturité (mois 4+)
                 </div>
               </div>
             </div>
