@@ -346,6 +346,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [cpc, setCpc]         = useState(8);
   const [billing, setBilling] = useState("cpc");
   const [cpm, setCpm]         = useState(30);
+  const [cplTarget, setCplTarget] = useState(190); // coût par lead constaté (confrère, expérience...)
   const [ctr, setCtr]         = useState(4);
   const [conv, setConv]       = useState(3.5);
   const [support, setSupport] = useState("landing");
@@ -406,7 +407,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   useLayoutEffect(() => {
     const d = getDefaultValues(channel, sector);
     // Taux de conversion sectoriel pondéré par le support actuellement choisi.
-    if (d) { setCpc(d.cpc); setCtr(d.ctr); setConv(Math.round(d.conversionRate * getSupportFactor(support) * 10) / 10); setBudget(d.budget); }
+    if (d) {
+      setCpc(d.cpc); setCtr(d.ctr); setBudget(d.budget);
+      const supportConv = Math.round(d.conversionRate * getSupportFactor(support) * 10) / 10;
+      setConv(supportConv);
+      // Coût par lead implicite du couple CPC/conversion, comme valeur de
+      // départ pour le mode CPL (à écraser par un coût constaté si connu).
+      setCplTarget(Math.max(1, Math.round(d.cpc / (supportConv / 100))));
+    }
     setCpm(CFG.channels[channel]?.cpmDefault ?? 10);
     setCycleVente(getSectorSalesCycle(sector));
     setMarge(getSectorMargin(sector));
@@ -427,8 +435,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.budget > 0)  setBudget(d.budget);
         if (d.tLeads > 0)  setTLeads(d.tLeads);
         if (d.cpc   >= 0)  setCpc(d.cpc);
-        if (d.billing === "cpc" || d.billing === "cpm") setBilling(d.billing);
+        if (d.billing === "cpc" || d.billing === "cpm" || d.billing === "cpl") setBilling(d.billing);
         if (d.cpm   > 0)   setCpm(d.cpm);
+        if (d.cplTarget > 0) setCplTarget(d.cplTarget);
         if (d.ctr   > 0)   setCtr(d.ctr);
         if (d.conv  > 0)   setConv(d.conv);
         if (CONVERSION_SUPPORTS[d.support]) setSupport(d.support);
@@ -512,22 +521,33 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const safeDiv = (a, b) => b > 0 ? a / b : 0;
 
   const isCpm = billing === "cpm";
+  const isCplBilling = billing === "cpl";
   if (mode === "budget") {
-    if (isCpm) {
+    if (isCplBilling) {
+      // CPL direct : le budget achète des leads à un coût unitaire connu ou
+      // constaté (chez un confrère, ou par expérience). Clics et impressions
+      // sont reconstruits pour l'entonnoir via le CTR et le taux de conversion.
+      leads = Math.round(safeDiv(budget, cplTarget));
+      clicks = Math.round(safeDiv(leads, conv / 100));
+      impr = Math.round(safeDiv(clicks, ctr / 100));
+    } else if (isCpm) {
       // CPM : le budget achète des impressions, les clics en découlent via le CTR.
       impr = Math.round(safeDiv(budget, cpm) * 1000);
       clicks = Math.round(impr * ctr / 100);
+      leads = Math.round(clicks * conv / 100);
     } else {
       clicks = Math.round(safeDiv(budget, cpc));
       impr = Math.round(safeDiv(clicks, ctr / 100));
+      leads = Math.round(clicks * conv / 100);
     }
-    leads = Math.round(clicks * conv / 100);
     budgetOut = budget;
   } else {
     leads = tLeads;
     clicks = Math.round(safeDiv(leads, conv / 100));
     impr = Math.round(safeDiv(clicks, ctr / 100));
-    budgetOut = isCpm ? Math.round(safeDiv(impr, 1000) * cpm) : Math.round(clicks * cpc);
+    budgetOut = isCplBilling ? Math.round(leads * cplTarget)
+      : isCpm ? Math.round(safeDiv(impr, 1000) * cpm)
+      : Math.round(clicks * cpc);
   }
   cpl = leads > 0 ? safeDiv(mode === "budget" ? budget : budgetOut, leads) : 0;
   // En e-commerce la conversion EST une vente : pas d'étape de closing distincte.
@@ -699,7 +719,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -759,6 +779,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   const cpcDisplay = `${cpc.toFixed(ch.cpcDigits ?? 1)} €`;
   const cpmDisplay = `${cpm.toFixed(ch.cpmDigits ?? 1)} €`;
+  const cplDisplay = `${Math.round(cplTarget)} €`;
 
   const S = {
     label: { fontSize: 9, fontWeight: 600, letterSpacing: "0.16em", color: "rgba(255,255,255,0.22)", textTransform: "uppercase", marginBottom: 10 },
@@ -980,7 +1001,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ ...S.label, color: "rgba(0,0,0,0.45)", marginBottom: 7 }}>Mode de facturation</div>
                   <div style={{ background: "rgba(0,0,0,0.06)", borderRadius: 9, padding: 4, display: "flex", border: "1px solid rgba(0,0,0,0.1)" }}>
-                    {[["cpc", "CPC", "coût par clic"], ["cpm", "CPM", "coût / 1000 impr."]].map(([m, l, t]) => (
+                    {[["cpc", "CPC", "coût par clic"], ["cpm", "CPM", "coût / 1000 impr."], ["cpl", biz.cplShort, `${biz.contactCostLabel.toLowerCase()} constaté (confrère, expérience...)`]].map(([m, l, t]) => (
                       <button key={m} onClick={() => setBilling(m)} title={t} style={{
                         ...S.modeBtn(billing === m, accent),
                         ...(billing !== m ? { color: "rgba(0,0,0,0.45)" } : {}),
@@ -995,10 +1016,21 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       step={ch.cpcStep} onChange={setCpc} accent={accent} display={cpcDisplay}
                       labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
                   ))
-                  : (
+                  : billing === "cpm"
+                  ? (
                     <Slider label={ch.cpmLabel ?? "CPM (€)"} value={cpm} min={ch.cpmStep ?? 0.5} max={ch.cpmMax ?? 60}
                       step={ch.cpmStep ?? 0.5} onChange={setCpm} accent={accent} display={cpmDisplay}
                       labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                  )
+                  : (
+                    <>
+                      <Slider label={`${biz.contactCostLabel} constaté (€)`} value={cplTarget} min={1} max={1000}
+                        step={1} onChange={setCplTarget} accent={accent} display={cplDisplay}
+                        labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
+                        Coût observé chez un confrère ou basé sur votre expérience, plutôt qu'estimé via CPC/CTR/conversion.
+                      </div>
+                    </>
                   )}
                 {ch.showCtr && (
                   <Slider label={ch.ctrLabel} value={ctr} min={0.1} max={ch.ctrMax}
@@ -1007,12 +1039,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 )}
                 {/* Cohérence des leviers : CPC, CTR et CPM sont liés
                     (CPM = CPC × CTR × 10). On affiche la métrique implicite du
-                    mode non sélectionné pour éviter un trio incohérent. */}
+                    mode non sélectionné pour éviter un trio incohérent. En CPL,
+                    le CPC implicite permet de vérifier que le coût constaté
+                    reste cohérent avec le CTR/la conversion saisis. */}
                 {ch.showCtr && (
                   <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginTop: -4, marginBottom: 14 }}>
                     {billing === "cpc"
                       ? `≈ CPM ${(cpc * ctr * 10).toFixed(1)} € à ce CTR`
-                      : `≈ CPC ${ctr > 0 ? (cpm / (ctr * 10)).toFixed(2) : "—"} € à ce CTR`}
+                      : billing === "cpm"
+                      ? `≈ CPC ${ctr > 0 ? (cpm / (ctr * 10)).toFixed(2) : "—"} € à ce CTR`
+                      : `≈ CPC ${(cplTarget * conv / 100).toFixed(2)} € à ce taux de conversion`}
                   </div>
                 )}
                 <div style={{ marginBottom: 14 }}>
