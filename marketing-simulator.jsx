@@ -366,7 +366,13 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [seasonalityEnabled, setSeasonalityEnabled] = useState(false);
   const [startMonth, setStartMonth]   = useState(0);
   const [highSeasonMonths, setHighSeasonMonths] = useState(Array(12).fill(false));
-  const [highSeasonMultiplier, setHighSeasonMultiplier] = useState(3);
+  // Deux leviers distincts en haute saison, pour ne pas les confondre :
+  //  - marketMultiplier : le marché lui-même (demande, recherches) est plus
+  //    gros, ce qui rend chaque euro investi plus efficace (CPL plus bas).
+  //  - budgetMultiplier : ce que VOUS choisissez d'investir en plus (ou pas)
+  //    pour capter cette demande. À 1, vous n'augmentez pas votre budget.
+  const [marketMultiplier, setMarketMultiplier] = useState(3);
+  const [budgetMultiplier, setBudgetMultiplier] = useState(1);
   const [prospect, setProspect] = useState("");
   const [logo, setLogo]       = useState(null);
   const [website, setWebsite] = useState("");
@@ -462,7 +468,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.startMonth >= 0 && d.startMonth <= 11) setStartMonth(d.startMonth);
         if (Array.isArray(d.highSeasonMonths) && d.highSeasonMonths.length === 12)
           setHighSeasonMonths(d.highSeasonMonths.map(Boolean));
-        if (d.highSeasonMultiplier >= 1) setHighSeasonMultiplier(d.highSeasonMultiplier);
+        if (d.marketMultiplier >= 1) setMarketMultiplier(d.marketMultiplier);
+        if (d.budgetMultiplier >= 1) setBudgetMultiplier(d.budgetMultiplier);
+        else if (d.highSeasonMultiplier >= 1) setMarketMultiplier(d.highSeasonMultiplier); // lien genere avant la separation marche/budget
         if (d.prospect)    setProspect(d.prospect);
         if (d.website)     { setWebsite(d.website); fetchLogoFromWebsite(d.website); }
       }
@@ -612,25 +620,46 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // Projection sur 12 mois combinant DEUX effets, mois par mois :
   //  • Apprentissage : le CPL/CPA baisse les premiers mois (LEARNING_STEPS),
-  //    puis se stabilise à maturité (×0,5 dès M4). À budget constant cela
+  //    puis se stabilise à maturité (×0,75 dès M4). À budget constant cela
   //    génère plus de volume ; à objectif constant cela coûte moins cher.
-  //  • Saisonnalité : en haute saison on capte plus de volume MAIS on dépense
-  //    aussi davantage (le coefficient s'applique au volume ET au budget),
-  //    sinon le ROI serait artificiellement gonflé par des leads « gratuits ».
+  //    L'index i (mois depuis le DÉMARRAGE de la campagne, pas le calendrier)
+  //    est ce qui relie la courbe d'apprentissage au mois de démarrage choisi :
+  //    démarrer juste avant la haute saison la fait tomber en pleine phase
+  //    d'apprentissage (lm proche de 1) ; démarrer plusieurs mois avant permet
+  //    d'aborder la haute saison avec un CPL déjà optimisé.
+  //  • Saisonnalité : deux leviers distincts en haute saison (cf. déclaration
+  //    de marketMultiplier/budgetMultiplier plus haut). Le marché rend chaque
+  //    euro plus efficace (CPL divisé par marketMultiplier) ; le budget est ce
+  //    que vous choisissez d'investir en plus (× budgetMultiplier). À budget
+  //    constant (budgetMultiplier = 1), un marché plus gros donne plus de
+  //    volume SANS dépenser plus : ce n'est plus automatique comme avant.
+
+  // Premier mois de haute saison depuis le démarrage de la campagne (0-11,
+  // null si aucun mois de haute saison coché) : signale si la haute saison
+  // arrive avant ou après la fin de la phase d'apprentissage (mois 4, cf.
+  // LEARNING_STEPS), pour aider à caler le mois de démarrage en conséquence.
+  const firstHighSeasonIdx = seasonalityEnabled
+    ? Array.from({ length: 12 }, (_, i) => i).find(i => highSeasonMonths[(startMonth + i) % 12]) ?? null
+    : null;
+  const highSeasonBeforeMaturity = firstHighSeasonIdx != null && firstHighSeasonIdx < 3;
   const seasonalMonths = Array.from({ length: 12 }, (_, i) => {
     const calMonth = (startMonth + i) % 12;
     const high = seasonalityEnabled && highSeasonMonths[calMonth];
-    const coef = high ? highSeasonMultiplier : 1;
+    const marketCoef = high ? marketMultiplier : 1;
+    const budgetCoef = high ? budgetMultiplier : 1;
     const lm = LEARNING_STEPS[i]?.mult ?? LEARNING_STEPS[LEARNING_STEPS.length - 1].mult; // mult CPL du mois
-    // budget figé → le volume profite de la baisse de CPL (÷ lm) ;
-    // objectif figé → le volume reste la cible, c'est le budget qui baisse (× lm).
-    const mLeads   = mode === "budget" ? leads * coef / lm : leads * coef;
+    // budget figé → le volume profite du budget investi en plus (× budgetCoef),
+    //   de l'efficacité marché (× marketCoef) et de la baisse de CPL (÷ lm) ;
+    // objectif figé → la cible de leads suit le budget qu'on choisit d'y mettre
+    //   (× budgetCoef), le marché et l'apprentissage rendent le budget nécessaire
+    //   pour l'atteindre moins élevé (÷ marketCoef, × lm).
+    const mLeads   = mode === "budget" ? leads * budgetCoef * marketCoef / lm : leads * budgetCoef;
     const mClients = biz.hasClosing ? mLeads * closing / 100 : mLeads;
     const mCA      = mClients * clientValue;
-    const mSpend   = mode === "budget" ? spend * coef : spend * coef * lm;
+    const mSpend   = mode === "budget" ? spend * budgetCoef : spend * budgetCoef * lm / marketCoef;
     return {
       label: seasonalityEnabled ? MONTH_NAMES[calMonth] : `M${i + 1}`,
-      high, coef,
+      high, marketCoef, budgetCoef,
       leads: mLeads,
       clients: mClients,
       ca: mCA,
@@ -736,7 +765,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -1214,10 +1243,21 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       ))}
                     </div>
 
-                    {/* Coefficient haute saison */}
-                    <Slider label="Coefficient haute saison" value={highSeasonMultiplier} min={1.5} max={6}
-                      step={0.5} onChange={setHighSeasonMultiplier} accent={accent} display={`×${highSeasonMultiplier.toFixed(1)}`}
+                    {/* Coefficient marché */}
+                    <Slider label="Coefficient marché (demande)" value={marketMultiplier} min={1} max={6}
+                      step={0.5} onChange={setMarketMultiplier} accent={accent} display={`×${marketMultiplier.toFixed(1)}`}
                       labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
+                      À quel point le marché est plus gros en haute saison (plus de recherches, CPL plus bas). N'augmente pas le budget à lui seul.
+                    </div>
+
+                    {/* Coefficient budget */}
+                    <Slider label="Coefficient budget investi" value={budgetMultiplier} min={1} max={6}
+                      step={0.5} onChange={setBudgetMultiplier} accent={accent} display={`×${budgetMultiplier.toFixed(1)}`}
+                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
+                      Ce que vous choisissez d'investir en plus en haute saison. Laisser à ×1 pour ne pas augmenter le budget malgré un marché plus gros.
+                    </div>
 
                     {/* Mois de démarrage */}
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 6 }}>Mois de démarrage de la campagne</div>
@@ -1225,6 +1265,18 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       style={{ width: "100%", background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" }}>
                       {MONTH_NAMES.map((m, i) => <option key={i} value={i}>{m}</option>)}
                     </select>
+                    {firstHighSeasonIdx != null && (
+                      <div style={{
+                        marginTop: 8, padding: "8px 10px", borderRadius: 7, fontSize: 10, lineHeight: 1.5,
+                        ...(highSeasonBeforeMaturity
+                          ? { background: "#a6402a14", border: "1px solid #a6402a40", color: "#7a3520" }
+                          : { background: `${accent}14`, border: `1px solid ${accent}40`, color: "rgba(0,0,0,0.55)" }),
+                      }}>
+                        {highSeasonBeforeMaturity
+                          ? `⚠ La haute saison démarre dès le mois ${firstHighSeasonIdx + 1} de la campagne, avant la fin de la phase d'apprentissage (~mois 4) : le CPL ne sera pas encore optimisé. Envisager de démarrer la campagne plus tôt.`
+                          : `✓ La haute saison démarre au mois ${firstHighSeasonIdx + 1} de la campagne, une fois la phase d'apprentissage terminée (CPL déjà optimisé).`}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -1410,7 +1462,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </div>
                   <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
                     {seasonalityEnabled
-                      ? `Montée en charge + saisonnalité (×${highSeasonMultiplier.toFixed(1)} en haute saison)`
+                      ? `Montée en charge + saisonnalité (marché ×${marketMultiplier.toFixed(1)}, budget ×${budgetMultiplier.toFixed(1)} en haute saison)`
                       : `Montée en charge incluse · activez la saisonnalité pour pondérer les mois`}
                   </div>
                 </div>
@@ -1451,7 +1503,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
                 {seasonalityEnabled && (
                   <div style={{ marginTop: 14, padding: "10px 12px", background: accent + "14", borderRadius: 8, border: `1px solid ${accent}33`, fontSize: 10.5, color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
-                    Démarrage en {MONTH_NAMES[startMonth]}. Volume et budget des mois de haute saison pondérés ×{highSeasonMultiplier.toFixed(1)} ; les premiers mois intègrent la montée en charge (CPL décroissant).
+                    Démarrage en {MONTH_NAMES[startMonth]}. En haute saison, le volume est pondéré ×{marketMultiplier.toFixed(1)} (marché) et le budget ×{budgetMultiplier.toFixed(1)} (investissement choisi) ; les premiers mois intègrent la montée en charge (CPL décroissant).
                   </div>
                 )}
               </div>
