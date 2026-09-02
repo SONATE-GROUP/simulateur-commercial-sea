@@ -1523,9 +1523,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               ))}
             </div>
             {shareUrl && (
-              <div style={{ marginTop: 14, padding: "9px 12px", background: G2, borderRadius: 7, border: `1px solid ${G3}` }}>
-                <div style={{ fontSize: 8, color: "#5a7a6a", letterSpacing: "0.12em", marginBottom: 3 }}>LIEN DE PARTAGE</div>
-                <div style={{ fontSize: 10, color: ORANGE, fontFamily: "monospace", wordBreak: "break-all" }}>{shareUrl}</div>
+              <div style={{ marginTop: 14, padding: "9px 12px", background: G2, borderRadius: 7, border: `1px solid ${G3}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={ORANGE} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                  </svg>
+                  <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)" }}>Lien de partage copié dans le presse-papiers</span>
+                </div>
+                <button onClick={() => navigator.clipboard?.writeText(shareUrl).catch(() => {})} style={{ background: "transparent", border: `1px solid ${G3}`, borderRadius: 6, padding: "4px 10px", color: ORANGE, fontSize: 10.5, cursor: "pointer", flexShrink: 0, fontFamily: "'Inter',sans-serif" }}>
+                  Recopier
+                </button>
               </div>
             )}
           </div>
