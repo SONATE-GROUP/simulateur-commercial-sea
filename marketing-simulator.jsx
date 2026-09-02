@@ -765,8 +765,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
         {/* ── LEFT PANEL (cream) ── */}
         <div style={{ width: 380, minWidth: 380, overflowY: "auto", borderRight: `1px solid ${L_BORD}`, padding: "16px 16px 28px", background: CREAM }}>
-          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(0,0,0,0.35)", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid rgba(0,0,0,0.1)" }}>Paramètres</div>
-
               {/* Canal */}
               <div style={{ marginBottom: 16 }}>
                 <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Canal d'acquisition</div>
