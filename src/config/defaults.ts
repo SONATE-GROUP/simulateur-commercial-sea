@@ -179,7 +179,7 @@ export const BUSINESS_TYPES = {
     hint: "serrurier, dépannage…",
     priorityContact: "Appel téléphonique",
     defaultContact: "appel",
-    contactOptions: ["appel", "formulaire"],
+    contactOptions: ["appel", "formulaire", "rdv", "chat"],
     conversionStage: "Appels",
     generatedLabel: "Appels générés",
     objectiveLabel: "Objectif appels",
@@ -196,7 +196,7 @@ export const BUSINESS_TYPES = {
     hint: "formulaire classique",
     priorityContact: "Formulaire / Lead",
     defaultContact: "formulaire",
-    contactOptions: ["formulaire", "appel"],
+    contactOptions: ["formulaire", "appel", "rdv", "chat"],
     conversionStage: "Leads",
     generatedLabel: "Leads générés",
     objectiveLabel: "Objectif leads",
@@ -227,12 +227,15 @@ export const BUSINESS_TYPES = {
   },
 };
 
-// Type de contact : canal d'entrée du prospect / mode de conversion. Les options
-// proposées dépendent du type de business (cf. contactOptions ci-dessus), et le
-// défaut est pré-rempli (defaultContact). Modifiable manuellement.
+// Type de contact : canal(aux) d'entrée du prospect / mode de conversion.
+// Sélection multiple (un business peut recevoir des leads par plusieurs canaux
+// à la fois). Les options proposées dépendent du type de business (cf.
+// contactOptions ci-dessus), et le défaut est pré-rempli (defaultContact).
 export const CONTACT_TYPES = {
   formulaire: { label: "Formulaire" },
   appel: { label: "Appel téléphonique" },
+  rdv: { label: "Prise de RDV" },
+  chat: { label: "Conversation chat" },
   achat: { label: "Achat en ligne" },
   clickcollect: { label: "Click & collect" },
 };

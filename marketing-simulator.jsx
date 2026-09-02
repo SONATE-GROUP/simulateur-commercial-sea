@@ -350,7 +350,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [conv, setConv]       = useState(3.5);
   const [support, setSupport] = useState("landing");
   const [businessType, setBusinessType] = useState("lead");
-  const [contactType, setContactType] = useState(BUSINESS_TYPES.lead.defaultContact);
+  const [contactTypes, setContactTypes] = useState([BUSINESS_TYPES.lead.defaultContact]);
   const [geoScope, setGeoScope] = useState("france");
   const [geoZone, setGeoZone]   = useState("");
   const [panierMoyen, setPanierMoyen] = useState(300);
@@ -432,7 +432,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.conv  > 0)   setConv(d.conv);
         if (CONVERSION_SUPPORTS[d.support]) setSupport(d.support);
         if (BUSINESS_TYPES[d.businessType]) setBusinessType(d.businessType);
-        if (CONTACT_TYPES[d.contactType]) setContactType(d.contactType);
+        if (Array.isArray(d.contactTypes) && d.contactTypes.some(k => CONTACT_TYPES[k])) {
+          setContactTypes(d.contactTypes.filter(k => CONTACT_TYPES[k]));
+        } else if (CONTACT_TYPES[d.contactType]) {
+          setContactTypes([d.contactType]); // liens partagés générés avant le passage au multi-select
+        }
         if (d.geoScope === "france" || d.geoScope === "localisee") setGeoScope(d.geoScope);
         if (d.geoZone) setGeoZone(d.geoZone);
         if (d.panierMoyen > 0) setPanierMoyen(d.panierMoyen);
@@ -678,7 +682,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, support, businessType, contactType, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -831,7 +835,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <Fold title="Type de business">
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {Object.entries(BUSINESS_TYPES).map(([k, b]) => (
-                    <button key={k} onClick={() => { setBusinessType(k); setContactType(b.defaultContact); }} style={{
+                    <button key={k} onClick={() => { setBusinessType(k); setContactTypes([b.defaultContact]); }} style={{
                       display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
                       padding: "8px 10px", borderRadius: 8, cursor: "pointer", textAlign: "left",
                       fontFamily: "'DM Sans',sans-serif", transition: "all 0.15s",
@@ -846,19 +850,32 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 </div>
               </Fold>
 
-              {/* Type de contact (pré-rempli selon le type de business) */}
+              {/* Type de contact (pré-rempli selon le type de business, sélection multiple) */}
               <Fold title="Type de contact">
-                <div style={{ display: "flex", gap: 6 }}>
-                  {(biz.contactOptions ?? Object.keys(CONTACT_TYPES)).map((k) => (
-                    <button key={k} onClick={() => setContactType(k)} style={{
-                      flex: 1, padding: "8px 6px", borderRadius: 8, cursor: "pointer",
-                      fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 600,
-                      transition: "all 0.15s",
-                      ...(contactType === k
-                        ? { background: accent, border: `1px solid ${accent}`, color: "#fff" }
-                        : { background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", color: "rgba(0,0,0,0.5)" }),
-                    }}>{CONTACT_TYPES[k]?.label ?? k}</button>
-                  ))}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {(biz.contactOptions ?? Object.keys(CONTACT_TYPES)).map((k) => {
+                    const active = contactTypes.includes(k);
+                    return (
+                      <button key={k} onClick={() => setContactTypes(curr => curr.includes(k)
+                        ? (curr.length > 1 ? curr.filter(x => x !== k) : curr)
+                        : [...curr, k])} style={{
+                        display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderRadius: 8, cursor: "pointer",
+                        fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 600,
+                        transition: "all 0.15s",
+                        ...(active
+                          ? { background: accent, border: `1px solid ${accent}`, color: "#fff" }
+                          : { background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", color: "rgba(0,0,0,0.5)" }),
+                      }}>
+                        <span style={{
+                          width: 13, height: 13, borderRadius: 3, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                          border: `1px solid ${active ? "#fff" : "rgba(0,0,0,0.3)"}`, background: active ? "rgba(255,255,255,0.15)" : "transparent",
+                        }}>
+                          {active && <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
+                        </span>
+                        {CONTACT_TYPES[k]?.label ?? k}
+                      </button>
+                    );
+                  })}
                 </div>
               </Fold>
 
@@ -1181,7 +1198,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <span style={{ color: ORANGE, fontSize: 10 }}>◆</span> Entonnoir de conversion
               <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
                 {Object.entries(BUSINESS_TYPES).map(([k, b]) => (
-                  <button key={k} onClick={() => { setBusinessType(k); setContactType(b.defaultContact); }} style={{
+                  <button key={k} onClick={() => { setBusinessType(k); setContactTypes([b.defaultContact]); }} style={{
                     fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
                     border: `1px solid ${businessType === k ? ORANGE : G3}`, background: businessType === k ? `${ORANGE}22` : "transparent",
                     color: businessType === k ? ORANGE : "#5a7a6a",
