@@ -361,6 +361,12 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [lifetime, setLifetime]       = useState(24); // durée de vie client (mois)
   const [marge, setMarge]             = useState(getSectorMargin("saas"));
   const [margeEnabled, setMargeEnabled] = useState(true);
+  // Effet halo (branding) : parmi les clics qui n'ont pas converti tout de
+  // suite, une part revient plus tard par une recherche de marque ou la
+  // fiche Google, en dehors du tracking SEA direct. Estimation a part,
+  // desactivee par defaut (hypothese, pas une donnee mesuree).
+  const [haloEnabled, setHaloEnabled] = useState(false);
+  const [haloRate, setHaloRate]       = useState(0.25);
   const [closing, setClosing]         = useState(20);
   const [cycleVente, setCycleVente]   = useState(1);
   const [seasonalityEnabled, setSeasonalityEnabled] = useState(false);
@@ -462,6 +468,8 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.lifetime >= 1) setLifetime(d.lifetime);
         if (d.marge >= 0 && d.marge <= 100) setMarge(d.marge);
         if (typeof d.margeEnabled === "boolean") setMargeEnabled(d.margeEnabled);
+        if (typeof d.haloEnabled === "boolean") setHaloEnabled(d.haloEnabled);
+        if (d.haloRate >= 0) setHaloRate(d.haloRate);
         if (d.closing > 0)     setClosing(d.closing);
         if (d.cycleVente >= 1 && d.cycleVente <= 12) setCycleVente(d.cycleVente);
         if (typeof d.seasonalityEnabled === "boolean") setSeasonalityEnabled(d.seasonalityEnabled);
@@ -591,6 +599,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const matureCA      = matureClients * clientValue;
   const matureProfit  = matureCA * effectiveMarge / 100 - matureSpend;
   const matureRoiPct  = matureSpend > 0 ? (matureProfit / matureSpend) * 100 : 0;
+
+  // Effet halo (branding) : parmi les clics qui n'ont pas converti tout de
+  // suite, une part revient plus tard via une recherche de marque ou la fiche
+  // Google (GMB), en dehors du tracking SEA direct. Estimation à part : ne
+  // modifie ni leads/clients/CA, ni CPL/ROI/budget affichés ailleurs.
+  const haloNonConverted = Math.max(0, clicks - leads);
+  const haloLeads   = haloEnabled ? Math.round(haloNonConverted * haloRate / 100) : 0;
+  const haloClients = biz.hasClosing ? Math.round(haloLeads * closing / 100) : haloLeads;
+  const haloCA      = haloClients * clientValue;
 
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
   // Le tableau détaillé dérive des mêmes paliers que le graphique (LEARNING_STEPS)
@@ -765,7 +782,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, haloEnabled, haloRate, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -1203,6 +1220,28 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 </div>
               </div>
 
+              {/* Effet halo (branding) */}
+              <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: haloEnabled ? 10 : 0 }}>
+                  <span style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 0 }}>Effet halo (leads indirects)</span>
+                  <button onClick={() => setHaloEnabled(v => !v)} title={haloEnabled ? "Désactiver" : "Activer"}
+                    style={{ width: 38, height: 20, borderRadius: 11, border: "none", cursor: "pointer", flexShrink: 0,
+                      background: haloEnabled ? accent : "rgba(0,0,0,0.18)", position: "relative", transition: "background .2s" }}>
+                    <span style={{ position: "absolute", top: 3, left: haloEnabled ? 21 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+                  </button>
+                </div>
+                {haloEnabled && (
+                  <>
+                    <Slider label="Taux de retour marque" value={haloRate} min={0} max={2}
+                      step={0.05} onChange={setHaloRate} accent={accent} display={`${haloRate.toFixed(2)} %`}
+                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
+                      Parmi les clics qui n'ont pas converti tout de suite, part estimée qui revient plus tard via une recherche de marque ou la fiche Google (GMB). Estimation à part : n'affecte pas le CPL ni le ROI affichés ailleurs.
+                    </div>
+                  </>
+                )}
+              </div>
+
               {/* Saisonnalité */}
               <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: seasonalityEnabled ? 14 : 0 }}>
@@ -1404,6 +1443,34 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               </div>
             )}
           </div>
+
+          {/* BLOC 3bis — effet halo (leads indirects estimés, à part) */}
+          {haloEnabled && (
+            <div style={{ backgroundColor: G5, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${G3}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, color: CREAM, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 14 }}>
+                <span style={{ color: ORANGE, fontSize: 10 }}>◆</span> Effet halo — leads indirects estimés
+              </div>
+              {[
+                { label: "1er point de contact", from: `Clics : ${fmtN(clicks)}`, arrow: `${conv.toFixed(1)}% conversion directe`, to: `Leads directs : ${fmtLeads(leads)}` },
+                { label: "2ème point de contact (retour marque)", from: `Clics non convertis : ${fmtN(haloNonConverted)}`, arrow: `${haloRate.toFixed(2)}% retour site/GMB`, to: `Leads indirects : ${fmtLeads(haloLeads)}` },
+              ].map((row, i) => (
+                <div key={i} style={{ marginBottom: i === 0 ? 14 : 0 }}>
+                  <div style={{ fontSize: 10, color: "#5a7a6a", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{row.label}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ flex: 1, background: G2, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: CREAM, fontWeight: 600 }}>{row.from}</div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, minWidth: 90 }}>
+                      <span style={{ color: ORANGE, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{row.arrow}</span>
+                      <span style={{ color: ORANGE, fontSize: 16 }}>→</span>
+                    </div>
+                    <div style={{ flex: 1, background: G2, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: CREAM, fontWeight: 600, textAlign: "right" }}>{row.to}</div>
+                  </div>
+                </div>
+              ))}
+              <div style={{ marginTop: 14, padding: "10px 12px", background: accent + "14", borderRadius: 8, border: `1px solid ${accent}33`, fontSize: 10.5, color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
+                +{fmtLeads(haloLeads)} leads indirects estimés{biz.hasClosing ? ` (~${fmtLeads(haloClients)} ${biz.finalSingular}${haloClients >= 2 ? "s" : ""}, ~${fmtC(haloCA)} de CA potentiel)` : ` (~${fmtC(haloCA)} de CA potentiel)`}, non inclus dans les chiffres ci-dessus (CPL, ROI, budget...).
+              </div>
+            </div>
+          )}
 
               {/* Courbe d'apprentissage — évolution du CPL sur les premiers mois */}
               <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
