@@ -175,6 +175,27 @@ function Slider({ label, value, min, max, step, onChange, accent, display, label
   );
 }
 
+// ─── Section repliable ───────────────────────────────────────
+function Fold({ title, defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <button onClick={() => setOpen(v => !v)} style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+        background: "none", border: "none", padding: 0, cursor: "pointer",
+        marginBottom: open ? 10 : 0, fontFamily: "inherit",
+      }}>
+        <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.16em", color: "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>{title}</span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+          style={{ color: "rgba(0,0,0,0.35)", transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s", flexShrink: 0 }}>
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 // ─── KPI Card ────────────────────────────────────────────────
 function KCard({ label, sub, value, fmt, accent, highlight }) {
   return (
@@ -793,8 +814,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               </div>
 
               {/* Secteur d'activité */}
-              <div style={{ marginBottom: 18 }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Secteur d'activité</div>
+              <Fold title="Secteur d'activité">
                 <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
                   {Object.entries(CFG.sectors).map(([k, l]) => (
                     <button key={k} onClick={() => setSector(k)} style={{
@@ -803,7 +823,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     }}>{l}</button>
                   ))}
                 </div>
-              </div>
+              </Fold>
 
               <div style={{ borderTop: "1px solid rgba(0,0,0,0.08)", marginBottom: 14 }} />
 
