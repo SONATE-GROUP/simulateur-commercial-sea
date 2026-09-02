@@ -22,6 +22,38 @@ export const FRENCH_REGIONS = {
   reunion: "La Réunion",
 };
 
+// Population par région (ordre de grandeur, INSEE), utilisée pour évaluer si un
+// budget défini en zone localisée est démesuré au regard du marché adressable
+// de la région choisie (cf. getRegionPopulationShare ci-dessous).
+const FRENCH_REGIONS_POPULATION = {
+  "auvergne-rhone-alpes": 8_100_000,
+  "bourgogne-franche-comte": 2_800_000,
+  bretagne: 3_400_000,
+  "centre-val-de-loire": 2_600_000,
+  corse: 350_000,
+  "grand-est": 5_500_000,
+  "hauts-de-france": 6_000_000,
+  "ile-de-france": 12_400_000,
+  normandie: 3_300_000,
+  "nouvelle-aquitaine": 6_100_000,
+  occitanie: 6_100_000,
+  "pays-de-la-loire": 3_900_000,
+  paca: 5_100_000,
+  guadeloupe: 380_000,
+  guyane: 300_000,
+  martinique: 360_000,
+  mayotte: 310_000,
+  reunion: 870_000,
+};
+
+const FRANCE_POPULATION_TOTAL = Object.values(FRENCH_REGIONS_POPULATION).reduce((s, p) => s + p, 0);
+
+// Poids démographique d'une région dans la population française (0 à 1).
+export function getRegionPopulationShare(regionKey) {
+  const pop = FRENCH_REGIONS_POPULATION[regionKey];
+  return pop ? pop / FRANCE_POPULATION_TOTAL : 0;
+}
+
 export const SECTORS = {
   saas: "SaaS / Tech",
   industrie: "Industrie",

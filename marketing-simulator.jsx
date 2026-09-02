@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { SECTORS, FRENCH_REGIONS, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES } from "./src/config/defaults";
+import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES } from "./src/config/defaults";
 import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
 
 const CFG = {
@@ -563,6 +563,17 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // auquel cas la baisse de CPL ci-dessus est peu probable.
   const lowSignal = leads > 0 && leads < MIN_SIGNAL_CONV;
 
+  // Budget démesuré au regard de la zone géographique : le budget de référence
+  // national (calibré pour cibler toute la France) est ramené au poids
+  // démographique de la région choisie, avec un plancher à 10% pour ne pas
+  // être trop agressif sur les très petites régions (un minimum de budget
+  // reste nécessaire pour faire tourner une campagne, quelle que soit la
+  // taille du marché local). Marge de ×2,5 avant de déclencher l'alerte.
+  const nationalRefBudget = getDefaultValues(channel, sector)?.budget ?? 0;
+  const regionShare = geoZone ? getRegionPopulationShare(geoZone) : 0;
+  const localBudgetCeiling = nationalRefBudget * Math.max(regionShare, 0.1) * 2.5;
+  const budgetHighForZone = geoScope === "localisee" && !!geoZone && nationalRefBudget > 0 && spend > localBudgetCeiling;
+
   // Projection sur 12 mois combinant DEUX effets, mois par mois :
   //  • Apprentissage : le CPL/CPA baisse les premiers mois (LEARNING_STEPS),
   //    puis se stabilise à maturité (×0,5 dès M4). À budget constant cela
@@ -950,6 +961,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </>
                 )}
               </div>
+
+              {/* Garde-fou : budget démesuré au regard de la zone géographique */}
+              {budgetHighForZone && (
+                <div style={{ marginBottom: 12, padding: "10px 12px", background: "#a6402a14", borderRadius: 8, border: "1px solid #a6402a40", display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#a6402a", fontSize: 12, lineHeight: 1.4 }}>⚠</span>
+                  <span style={{ fontSize: 10.5, color: "#7a3520", lineHeight: 1.5 }}>
+                    {fmtC(spend)}/mois sur {FRENCH_REGIONS[geoZone]} (~{Math.round(regionShare * 100)}% de la population française) : budget élevé au regard du marché adressable localement, risque de saturer les enchères. Envisager d'élargir la zone ciblée ou de réduire le budget.
+                  </span>
+                </div>
+              )}
 
               {/* Sliders */}
               <div style={{ background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
