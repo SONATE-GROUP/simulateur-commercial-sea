@@ -612,8 +612,13 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // Projection sur 12 mois combinant DEUX effets, mois par mois :
   //  • Apprentissage : le CPL/CPA baisse les premiers mois (LEARNING_STEPS),
-  //    puis se stabilise à maturité (×0,5 dès M4). À budget constant cela
+  //    puis se stabilise à maturité (×0,75 dès M4). À budget constant cela
   //    génère plus de volume ; à objectif constant cela coûte moins cher.
+  //    L'index i (mois depuis le DÉMARRAGE de la campagne, pas le calendrier)
+  //    est ce qui relie la courbe d'apprentissage au mois de démarrage choisi :
+  //    démarrer juste avant la haute saison la fait tomber en pleine phase
+  //    d'apprentissage (lm proche de 1) ; démarrer plusieurs mois avant permet
+  //    d'aborder la haute saison avec un CPL déjà optimisé.
   //  • Saisonnalité : en haute saison on capte plus de volume MAIS on dépense
   //    aussi davantage (le coefficient s'applique au volume ET au budget),
   //    sinon le ROI serait artificiellement gonflé par des leads « gratuits ».
