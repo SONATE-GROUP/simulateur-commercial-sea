@@ -297,6 +297,30 @@ export const CONTACT_TYPES = {
   clickcollect: { label: "Click & collect" },
 };
 
+// Répartition par défaut des leads entre types de contact, par business type
+// (en %, somme = 100 sur l'ensemble des contactOptions du business). Hypothèses
+// de départ à ajuster au cas par cas : un business d'urgence reçoit surtout des
+// appels, un e-commerce surtout des achats directs, un lead classique un mix
+// formulaire/appel avec RDV et chat en appoint.
+export const CONTACT_SPLIT_DEFAULTS = {
+  urgence: { appel: 90, formulaire: 10, rdv: 0, chat: 0 },
+  lead: { formulaire: 55, appel: 25, rdv: 12, chat: 8 },
+  ecommerce: { achat: 85, clickcollect: 10, appel: 5 },
+};
+
+// Répartition par défaut, ramenée aux seuls types de contact sélectionnés
+// (renormalisée à 100%). Si aucun des types sélectionnés n'a de poids par
+// défaut, répartition égale en repli.
+export function getDefaultContactSplit(businessType, types) {
+  const profile = CONTACT_SPLIT_DEFAULTS[businessType] ?? {};
+  const total = types.reduce((s, t) => s + (profile[t] ?? 0), 0);
+  if (total <= 0) {
+    const equal = types.length > 0 ? Math.round(100 / types.length) : 0;
+    return Object.fromEntries(types.map(t => [t, equal]));
+  }
+  return Object.fromEntries(types.map(t => [t, Math.round((profile[t] ?? 0) / total * 100)]));
+}
+
 export function getSupportFactor(support) {
   return CONVERSION_SUPPORTS[support]?.factor ?? 1;
 }

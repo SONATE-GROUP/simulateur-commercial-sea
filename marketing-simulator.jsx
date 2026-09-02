@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES } from "./src/config/defaults";
+import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit } from "./src/config/defaults";
 import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
 
 const CFG = {
@@ -353,6 +353,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [support, setSupport] = useState("landing");
   const [businessType, setBusinessType] = useState("lead");
   const [contactTypes, setContactTypes] = useState([BUSINESS_TYPES.lead.defaultContact]);
+  // Répartition des leads entre les types de contact sélectionnés (% par
+  // type, somme = 100). Pré-remplie selon le business type, réajustable.
+  const [contactSplit, setContactSplit] = useState({ [BUSINESS_TYPES.lead.defaultContact]: 100 });
   const [geoScope, setGeoScope] = useState("france");
   const [geoZone, setGeoZone]   = useState("");
   const [panierMoyen, setPanierMoyen] = useState(300);
@@ -397,6 +400,22 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const accent = ch.color;
   // Lecteur = lecture seule : pas d'enregistrement. Consultation (prospect) non plus.
   const canSave = !consultation && user?.role !== "Lecteur";
+  // Ajuste manuellement la part d'un type de contact : les autres types
+  // sélectionnés se redistribuent proportionnellement pour que la somme reste
+  // à 100%, plutôt que de laisser l'utilisatrice équilibrer chaque curseur.
+  const updateContactSplit = (key, value) => {
+    setContactSplit(prev => {
+      const others = Object.keys(prev).filter(k => k !== key);
+      const remaining = 100 - value;
+      const next = { ...prev, [key]: value };
+      if (others.length === 0) return next;
+      const othersSum = others.reduce((s, k) => s + prev[k], 0);
+      others.forEach(k => {
+        next[k] = othersSum > 0 ? Math.round(prev[k] / othersSum * remaining) : Math.round(remaining / others.length);
+      });
+      return next;
+    });
+  };
   const openMyReports = () => {
     setMyReportsOpen(true); setMyReports(null);
     fetch("/api/my-reports", { headers: { "X-Requested-With": "fetch" } })
@@ -455,10 +474,19 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.conv  > 0)   setConv(d.conv);
         if (CONVERSION_SUPPORTS[d.support]) setSupport(d.support);
         if (BUSINESS_TYPES[d.businessType]) setBusinessType(d.businessType);
+        let restoredContactTypes = null;
         if (Array.isArray(d.contactTypes) && d.contactTypes.some(k => CONTACT_TYPES[k])) {
-          setContactTypes(d.contactTypes.filter(k => CONTACT_TYPES[k]));
+          restoredContactTypes = d.contactTypes.filter(k => CONTACT_TYPES[k]);
         } else if (CONTACT_TYPES[d.contactType]) {
-          setContactTypes([d.contactType]); // liens partagés générés avant le passage au multi-select
+          restoredContactTypes = [d.contactType]; // liens partagés générés avant le passage au multi-select
+        }
+        if (restoredContactTypes) {
+          setContactTypes(restoredContactTypes);
+          if (d.contactSplit && typeof d.contactSplit === "object") {
+            setContactSplit(d.contactSplit);
+          } else if (BUSINESS_TYPES[d.businessType]) {
+            setContactSplit(getDefaultContactSplit(d.businessType, restoredContactTypes)); // lien généré avant la répartition
+          }
         }
         if (d.geoScope === "france" || d.geoScope === "localisee") setGeoScope(d.geoScope);
         if (FRENCH_REGIONS[d.geoZone]) setGeoZone(d.geoZone);
@@ -608,6 +636,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const haloLeads   = haloEnabled ? Math.round(haloNonConverted * haloRate / 100) : 0;
   const haloClients = biz.hasClosing ? Math.round(haloLeads * closing / 100) : haloLeads;
   const haloCA      = haloClients * clientValue;
+
+  // Répartition des leads entre types de contact (formulaire, appel, RDV...),
+  // à titre indicatif : ventile le volume de leads déjà calculé, ne change
+  // aucun autre chiffre.
+  const contactBreakdown = contactTypes.map(k => ({
+    key: k,
+    label: CONTACT_TYPES[k]?.label ?? k,
+    pct: contactSplit[k] ?? 0,
+    leads: Math.round(leads * (contactSplit[k] ?? 0) / 100),
+  }));
 
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
   // Le tableau détaillé dérive des mêmes paliers que le graphique (LEARNING_STEPS)
@@ -782,7 +820,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, haloEnabled, haloRate, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, haloEnabled, haloRate, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -936,7 +974,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <Fold title="Type de business">
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {Object.entries(BUSINESS_TYPES).map(([k, b]) => (
-                    <button key={k} onClick={() => { setBusinessType(k); setContactTypes([b.defaultContact]); }} style={{
+                    <button key={k} onClick={() => { setBusinessType(k); setContactTypes([b.defaultContact]); setContactSplit({ [b.defaultContact]: 100 }); }} style={{
                       display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
                       padding: "8px 10px", borderRadius: 8, cursor: "pointer", textAlign: "left",
                       fontFamily: "'DM Sans',sans-serif", transition: "all 0.15s",
@@ -957,9 +995,13 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   {(biz.contactOptions ?? Object.keys(CONTACT_TYPES)).map((k) => {
                     const active = contactTypes.includes(k);
                     return (
-                      <button key={k} onClick={() => setContactTypes(curr => curr.includes(k)
-                        ? (curr.length > 1 ? curr.filter(x => x !== k) : curr)
-                        : [...curr, k])} style={{
+                      <button key={k} onClick={() => {
+                        const next = contactTypes.includes(k)
+                          ? (contactTypes.length > 1 ? contactTypes.filter(x => x !== k) : contactTypes)
+                          : [...contactTypes, k];
+                        setContactTypes(next);
+                        setContactSplit(getDefaultContactSplit(businessType, next));
+                      }} style={{
                         display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderRadius: 8, cursor: "pointer",
                         fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 600,
                         transition: "all 0.15s",
@@ -978,6 +1020,22 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     );
                   })}
                 </div>
+                {contactTypes.length > 1 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginBottom: 8 }}>Répartition estimée des leads</div>
+                    {contactTypes.map(k => (
+                      <div key={k} style={{ marginBottom: 8 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                          <span style={{ fontSize: 11, color: "rgba(0,0,0,0.5)" }}>{CONTACT_TYPES[k]?.label ?? k}</span>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: accent }}>{Math.round(contactSplit[k] ?? 0)} %</span>
+                        </div>
+                        <input type="range" min={0} max={100} step={1} value={Math.round(contactSplit[k] ?? 0)}
+                          onChange={e => updateContactSplit(k, Number(e.target.value))}
+                          style={{ width: "100%", accentColor: accent }} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Fold>
 
               {/* Zone géographique */}
@@ -1391,7 +1449,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <span style={{ color: ORANGE, fontSize: 10 }}>◆</span> Entonnoir de conversion
               <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
                 {Object.entries(BUSINESS_TYPES).map(([k, b]) => (
-                  <button key={k} onClick={() => { setBusinessType(k); setContactTypes([b.defaultContact]); }} style={{
+                  <button key={k} onClick={() => { setBusinessType(k); setContactTypes([b.defaultContact]); setContactSplit({ [b.defaultContact]: 100 }); }} style={{
                     fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
                     border: `1px solid ${businessType === k ? ORANGE : G3}`, background: businessType === k ? `${ORANGE}22` : "transparent",
                     color: businessType === k ? ORANGE : "#5a7a6a",
@@ -1444,7 +1502,34 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
             )}
           </div>
 
-          {/* BLOC 3bis — effet halo (leads indirects estimés, à part) */}
+          {/* BLOC 3bis — répartition des leads par type de contact */}
+          {contactBreakdown.length > 1 && (() => {
+            const palette = [accent, "#3b82f6", "#4caf50", "#eab308", "#a78bfa", "#f472b6"];
+            return (
+              <div style={{ backgroundColor: G5, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${G3}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: CREAM, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 14 }}>
+                  <span style={{ color: ORANGE, fontSize: 10 }}>◆</span> Répartition des leads par type de contact
+                </div>
+                <div style={{ display: "flex", width: "100%", height: 26, borderRadius: 6, overflow: "hidden" }}>
+                  {contactBreakdown.map((c, i) => (
+                    <div key={c.key} style={{ width: `${c.pct}%`, background: palette[i % palette.length], minWidth: c.pct > 0 ? 2 : 0 }} title={`${c.label} : ${Math.round(c.pct)}%`} />
+                  ))}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 14 }}>
+                  {contactBreakdown.map((c, i) => (
+                    <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 2, background: palette[i % palette.length], flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>{c.label}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: CREAM }}>{Math.round(c.pct)}%</span>
+                      <span style={{ fontSize: 10, color: "#5a7a6a" }}>({fmtLeads(c.leads)} {biz.conversionStage.toLowerCase()})</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* BLOC 3ter — effet halo (leads indirects estimés, à part) */}
           {haloEnabled && (
             <div style={{ backgroundColor: G5, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${G3}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, color: CREAM, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 14 }}>
