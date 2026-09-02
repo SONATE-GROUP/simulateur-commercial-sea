@@ -310,7 +310,7 @@ function LearningCurve({ data, color }) {
 }
 
 // Réduction marginale du CPL mois après mois. La phase d'apprentissage
-// algorithmique elle-même dure ~2 à 6 semaines ; les gains viennent surtout de
+// algorithmique elle-même dure ~5 à 12 semaines ; les gains viennent surtout de
 // l'optimisation continue (mots-clés/audiences/créas) sur M2-M4, qui atteint
 // l'essentiel du gain DURABLE prudent (~−25 % vs M1) dès le 4ème mois. Au-delà,
 // l'optimisation continue mais ne rapporte plus que ~−1 %/mois, plutôt qu'une
@@ -1388,7 +1388,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ marginTop: 14, padding: "10px 12px", background: accent + "14", borderRadius: 8, border: `1px solid ${accent}33`, display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <span style={{ color: accent, fontSize: 12, lineHeight: 1.4 }}>ⓘ</span>
                   <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
-                    La phase d'apprentissage algorithmique dure ~2 à 6 semaines. Les gains de {biz.cplShort} des premiers mois viennent surtout de l'optimisation continue (mots-clés, audiences, créas) et se stabilisent autour de −25 % à maturité.
+                    La phase d'apprentissage algorithmique dure ~5 à 12 semaines. Les gains de {biz.cplShort} des premiers mois viennent surtout de l'optimisation continue (mots-clés, audiences, créas) et se stabilisent autour de −25 % à maturité.
                   </span>
                 </div>
                 {/* Garde-fou : signal insuffisant pour l'algorithme */}
