@@ -803,7 +803,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
         {/* ── LEFT PANEL (cream) ── */}
-        <div style={{ width: 380, minWidth: 380, overflowY: "auto", borderRight: `1px solid ${L_BORD}`, padding: "16px 16px 28px", background: CREAM }}>
+        <div className="scroll-light" style={{ width: 380, minWidth: 380, overflowY: "auto", borderRight: `1px solid ${L_BORD}`, padding: "16px 16px 28px", background: CREAM }}>
               {/* Canal */}
               <div style={{ marginBottom: 16 }}>
                 <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Canal d'acquisition</div>
@@ -1135,7 +1135,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
             </div>
 
         {/* ── RIGHT PANEL (dark) ── */}
-        <div ref={contentRef} style={{ flex: 1, overflowY: "auto", padding: "14px 18px 28px", background: G }}>
+        <div ref={contentRef} className="scroll-dark" style={{ flex: 1, overflowY: "auto", padding: "14px 18px 28px", background: G }}>
 
           {/* Report header */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", backgroundColor: G2, borderRadius: 10, padding: "14px 20px", border: `1px solid ${G3}`, marginBottom: 14 }}>
@@ -1358,7 +1358,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
       {/* Mes rapports — rapports des espaces dont l'utilisateur est membre */}
       {myReportsOpen && (
-        <div onMouseDown={() => setMyReportsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "60px 20px", overflowY: "auto" }}>
+        <div onMouseDown={() => setMyReportsOpen(false)} className="scroll-dark" style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "60px 20px", overflowY: "auto" }}>
           <div onMouseDown={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 640, background: G, borderRadius: 14, border: `1px solid ${G3}`, boxShadow: "0 16px 48px rgba(0,0,0,0.5)", overflow: "hidden" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 22px", borderBottom: `1px solid ${G3}` }}>
               <div style={{ fontWeight: 800, fontSize: 16, color: CREAM }}>Mes rapports</div>
@@ -1406,7 +1406,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
           .map(e => ({ ...e, count: e.visits.length, total: e.visits.reduce((s, v) => s + (v.duration || 0), 0) }))
           .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
         return (
-          <div onMouseDown={() => setTrackingOpen(false)} style={{
+          <div onMouseDown={() => setTrackingOpen(false)} className="scroll-dark" style={{
             position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.55)",
             display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "60px 20px", overflowY: "auto",
           }}>
