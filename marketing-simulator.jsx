@@ -310,17 +310,18 @@ function LearningCurve({ data, color }) {
 }
 
 // Réduction marginale du CPL mois après mois. La phase d'apprentissage
-// algorithmique elle-même dure ~2 à 6 semaines ; les gains des premiers mois
-// viennent surtout de l'optimisation continue (mots-clés/audiences/créas) et se
-// stabilisent à maturité. On retient un gain DURABLE prudent (~−25 % vs M1),
-// plutôt qu'une division par deux maintenue toute l'année (irréaliste).
+// algorithmique elle-même dure ~5 à 12 semaines ; les gains viennent surtout de
+// l'optimisation continue (mots-clés/audiences/créas) sur M2-M4, qui atteint
+// l'essentiel du gain DURABLE prudent (~−25 % vs M1) dès le 4ème mois. Au-delà,
+// l'optimisation continue mais ne rapporte plus que ~−1 %/mois, plutôt qu'une
+// division par deux maintenue toute l'année (irréaliste).
 const LEARNING_STEPS = [
   { label: "M1", mult: 1.0,  delta: null },
-  { label: "M2", mult: 0.92, delta: -8 },
-  { label: "M3", mult: 0.85, delta: -8 },
-  { label: "M4", mult: 0.78, delta: -8 },
-  { label: "M5", mult: 0.76, delta: -3 },
-  { label: "M6", mult: 0.75, delta: null },
+  { label: "M2", mult: 0.90, delta: -10 },
+  { label: "M3", mult: 0.80, delta: -11 },
+  { label: "M4", mult: 0.75, delta: -6 },
+  { label: "M5", mult: 0.74, delta: -1 },
+  { label: "M6", mult: 0.73, delta: -1 },
 ];
 // Seuil de signal en deçà duquel l'algorithme manque de conversions pour
 // optimiser : ~30 conv/mois (recommandation Google Smart Bidding ; Meta ~50/sem).
@@ -346,6 +347,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [cpc, setCpc]         = useState(8);
   const [billing, setBilling] = useState("cpc");
   const [cpm, setCpm]         = useState(30);
+  const [cplTarget, setCplTarget] = useState(190); // coût par lead constaté (confrère, expérience...)
   const [ctr, setCtr]         = useState(4);
   const [conv, setConv]       = useState(3.5);
   const [support, setSupport] = useState("landing");
@@ -406,7 +408,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   useLayoutEffect(() => {
     const d = getDefaultValues(channel, sector);
     // Taux de conversion sectoriel pondéré par le support actuellement choisi.
-    if (d) { setCpc(d.cpc); setCtr(d.ctr); setConv(Math.round(d.conversionRate * getSupportFactor(support) * 10) / 10); setBudget(d.budget); }
+    if (d) {
+      setCpc(d.cpc); setCtr(d.ctr); setBudget(d.budget);
+      const supportConv = Math.round(d.conversionRate * getSupportFactor(support) * 10) / 10;
+      setConv(supportConv);
+      // Coût par lead implicite du couple CPC/conversion, comme valeur de
+      // départ pour le mode CPL (à écraser par un coût constaté si connu).
+      setCplTarget(Math.max(1, Math.round(d.cpc / (supportConv / 100))));
+    }
     setCpm(CFG.channels[channel]?.cpmDefault ?? 10);
     setCycleVente(getSectorSalesCycle(sector));
     setMarge(getSectorMargin(sector));
@@ -427,8 +436,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.budget > 0)  setBudget(d.budget);
         if (d.tLeads > 0)  setTLeads(d.tLeads);
         if (d.cpc   >= 0)  setCpc(d.cpc);
-        if (d.billing === "cpc" || d.billing === "cpm") setBilling(d.billing);
+        if (d.billing === "cpc" || d.billing === "cpm" || d.billing === "cpl") setBilling(d.billing);
         if (d.cpm   > 0)   setCpm(d.cpm);
+        if (d.cplTarget > 0) setCplTarget(d.cplTarget);
         if (d.ctr   > 0)   setCtr(d.ctr);
         if (d.conv  > 0)   setConv(d.conv);
         if (CONVERSION_SUPPORTS[d.support]) setSupport(d.support);
@@ -512,22 +522,33 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const safeDiv = (a, b) => b > 0 ? a / b : 0;
 
   const isCpm = billing === "cpm";
+  const isCplBilling = billing === "cpl";
   if (mode === "budget") {
-    if (isCpm) {
+    if (isCplBilling) {
+      // CPL direct : le budget achète des leads à un coût unitaire connu ou
+      // constaté (chez un confrère, ou par expérience). Clics et impressions
+      // sont reconstruits pour l'entonnoir via le CTR et le taux de conversion.
+      leads = Math.round(safeDiv(budget, cplTarget));
+      clicks = Math.round(safeDiv(leads, conv / 100));
+      impr = Math.round(safeDiv(clicks, ctr / 100));
+    } else if (isCpm) {
       // CPM : le budget achète des impressions, les clics en découlent via le CTR.
       impr = Math.round(safeDiv(budget, cpm) * 1000);
       clicks = Math.round(impr * ctr / 100);
+      leads = Math.round(clicks * conv / 100);
     } else {
       clicks = Math.round(safeDiv(budget, cpc));
       impr = Math.round(safeDiv(clicks, ctr / 100));
+      leads = Math.round(clicks * conv / 100);
     }
-    leads = Math.round(clicks * conv / 100);
     budgetOut = budget;
   } else {
     leads = tLeads;
     clicks = Math.round(safeDiv(leads, conv / 100));
     impr = Math.round(safeDiv(clicks, ctr / 100));
-    budgetOut = isCpm ? Math.round(safeDiv(impr, 1000) * cpm) : Math.round(clicks * cpc);
+    budgetOut = isCplBilling ? Math.round(leads * cplTarget)
+      : isCpm ? Math.round(safeDiv(impr, 1000) * cpm)
+      : Math.round(clicks * cpc);
   }
   cpl = leads > 0 ? safeDiv(mode === "budget" ? budget : budgetOut, leads) : 0;
   // En e-commerce la conversion EST une vente : pas d'étape de closing distincte.
@@ -551,14 +572,29 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // Seuil de rentabilité : ROAS minimal pour que la marge couvre la dépense.
   const breakEvenRoas = effectiveMarge > 0 ? 100 / effectiveMarge : Infinity;
 
+  // ROI à maturité : le ROI net ci-dessus reflète le CPL du mois 1 (réglages
+  // actuels) ; celui-ci projette le même budget/objectif une fois le CPL
+  // stabilisé au palier d'apprentissage (LEARNING_STEPS[3] = mois 4), pour voir
+  // d'un coup d'œil l'écart entre "aujourd'hui" et "une fois l'algorithme optimisé".
+  const matureLm      = LEARNING_STEPS[3].mult;
+  const matureLeads   = mode === "budget" ? leads / matureLm : leads;
+  const matureSpend   = mode === "budget" ? spend : spend * matureLm;
+  const matureClients = biz.hasClosing ? matureLeads * closing / 100 : matureLeads;
+  const matureCA      = matureClients * clientValue;
+  const matureProfit  = matureCA * effectiveMarge / 100 - matureSpend;
+  const matureRoiPct  = matureSpend > 0 ? (matureProfit / matureSpend) * 100 : 0;
+
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
+  // Le tableau détaillé dérive des mêmes paliers que le graphique (LEARNING_STEPS)
+  // plutôt que de dupliquer les pourcentages, pour ne jamais désynchroniser les deux.
   const learningData = LEARNING_STEPS.map(s => ({ ...s, cpl: cpl * s.mult }));
-  const learningTable = [
-    { label: "Mois 1",      deltaLabel: `${biz.cplShort} de base`, isBase: true, cpl: cpl * 1.0 },
-    { label: "Mois 2",      deltaLabel: "−8%",                                    cpl: cpl * 0.92 },
-    { label: "Mois 3",      deltaLabel: "−8% suppl.",                             cpl: cpl * 0.85 },
-    { label: "Mois 4 et +", deltaLabel: "≈ −25% vs M1", tag: "maturité",          cpl: cpl * 0.75 },
-  ];
+  const learningTable = LEARNING_STEPS.map((s, i) => ({
+    label: `Mois ${i + 1}`,
+    deltaLabel: i === 0 ? `${biz.cplShort} de base` : `${s.delta < 0 ? "−" : ""}${Math.abs(s.delta ?? 0)}%`,
+    isBase: i === 0,
+    tag: i === 3 ? "maturité" : undefined,
+    cpl: cpl * s.mult,
+  }));
   // Signal insuffisant : trop peu de conversions pour que l'algorithme optimise,
   // auquel cas la baisse de CPL ci-dessus est peu probable.
   const lowSignal = leads > 0 && leads < MIN_SIGNAL_CONV;
@@ -616,7 +652,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const cv = Math.round(cycleVente);
   const realizedCohorts = Math.max(1, 13 - cv); // nb de mois dont le CA tombe en année 1
   const caRealizedY1 = seasonalMonths.slice(0, realizedCohorts).reduce((s, m) => s + m.ca, 0);
-  const cycleShiftsCA = biz.hasClosing && cv > 1; // pas de décalage en e-commerce (achat immédiat)
 
   // Revenu récurrent : annualCA mesure la LTV cumulée des clients acquis sur
   // l'année (valeur générée). Le CA réellement FACTURÉ en année 1 se limite aux
@@ -629,8 +664,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         return s + m.clients * monthsBilled;
       }, 0)
     : caRealizedY1;
-  // Montre la nuance « généré vs encaissé année 1 » dès qu'elle est significative.
-  const showRealizedSplit = recurring ? billedY1 < annualCA - 0.5 : cycleShiftsCA;
+  // Détail « généré vs encaissé année 1 » affiché seulement en revenu récurrent
+  // (la LTV s'étale réellement sur plusieurs années) ; en ponctuel, le décalage
+  // lié au cycle de vente reste un détail qui n'a pas besoin d'être affiché.
+  const showRealizedSplit = recurring && billedY1 < annualCA - 0.5;
 
   const stages = [
     { label: ch.funnel[0], value: impr },
@@ -699,7 +736,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -759,6 +796,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   const cpcDisplay = `${cpc.toFixed(ch.cpcDigits ?? 1)} €`;
   const cpmDisplay = `${cpm.toFixed(ch.cpmDigits ?? 1)} €`;
+  const cplDisplay = `${Math.round(cplTarget)} €`;
 
   const S = {
     label: { fontSize: 9, fontWeight: 600, letterSpacing: "0.16em", color: "rgba(255,255,255,0.22)", textTransform: "uppercase", marginBottom: 10 },
@@ -980,7 +1018,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ ...S.label, color: "rgba(0,0,0,0.45)", marginBottom: 7 }}>Mode de facturation</div>
                   <div style={{ background: "rgba(0,0,0,0.06)", borderRadius: 9, padding: 4, display: "flex", border: "1px solid rgba(0,0,0,0.1)" }}>
-                    {[["cpc", "CPC", "coût par clic"], ["cpm", "CPM", "coût / 1000 impr."]].map(([m, l, t]) => (
+                    {[["cpc", "CPC", "coût par clic"], ["cpm", "CPM", "coût / 1000 impr."], ["cpl", biz.cplShort, `${biz.contactCostLabel.toLowerCase()} constaté (confrère, expérience...)`]].map(([m, l, t]) => (
                       <button key={m} onClick={() => setBilling(m)} title={t} style={{
                         ...S.modeBtn(billing === m, accent),
                         ...(billing !== m ? { color: "rgba(0,0,0,0.45)" } : {}),
@@ -995,10 +1033,21 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       step={ch.cpcStep} onChange={setCpc} accent={accent} display={cpcDisplay}
                       labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
                   ))
-                  : (
+                  : billing === "cpm"
+                  ? (
                     <Slider label={ch.cpmLabel ?? "CPM (€)"} value={cpm} min={ch.cpmStep ?? 0.5} max={ch.cpmMax ?? 60}
                       step={ch.cpmStep ?? 0.5} onChange={setCpm} accent={accent} display={cpmDisplay}
                       labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                  )
+                  : (
+                    <>
+                      <Slider label={`${biz.contactCostLabel} constaté (€)`} value={cplTarget} min={1} max={1000}
+                        step={1} onChange={setCplTarget} accent={accent} display={cplDisplay}
+                        labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
+                        Coût observé chez un confrère ou basé sur votre expérience, plutôt qu'estimé via CPC/CTR/conversion.
+                      </div>
+                    </>
                   )}
                 {ch.showCtr && (
                   <Slider label={ch.ctrLabel} value={ctr} min={0.1} max={ch.ctrMax}
@@ -1007,12 +1056,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 )}
                 {/* Cohérence des leviers : CPC, CTR et CPM sont liés
                     (CPM = CPC × CTR × 10). On affiche la métrique implicite du
-                    mode non sélectionné pour éviter un trio incohérent. */}
+                    mode non sélectionné pour éviter un trio incohérent. En CPL,
+                    le CPC implicite permet de vérifier que le coût constaté
+                    reste cohérent avec le CTR/la conversion saisis. */}
                 {ch.showCtr && (
                   <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginTop: -4, marginBottom: 14 }}>
                     {billing === "cpc"
                       ? `≈ CPM ${(cpc * ctr * 10).toFixed(1)} € à ce CTR`
-                      : `≈ CPC ${ctr > 0 ? (cpm / (ctr * 10)).toFixed(2) : "—"} € à ce CTR`}
+                      : billing === "cpm"
+                      ? `≈ CPC ${ctr > 0 ? (cpm / (ctr * 10)).toFixed(2) : "—"} € à ce CTR`
+                      : `≈ CPC ${(cplTarget * conv / 100).toFixed(2)} € à ce taux de conversion`}
                   </div>
                 )}
                 <div style={{ marginBottom: 14 }}>
@@ -1226,6 +1279,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
                   {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {roiPct >= 0 ? "rentable" : "non rentable"}
                 </div>
+                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="ROI net une fois le CPL stabilisé au palier d'apprentissage (mois 4), à budget/objectif constant">
+                  ≈ {matureRoiPct >= 0 ? "+" : ""}{Math.round(matureRoiPct)}% à maturité (mois 4+)
+                </div>
               </div>
             </div>
           </div>
@@ -1332,7 +1388,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ marginTop: 14, padding: "10px 12px", background: accent + "14", borderRadius: 8, border: `1px solid ${accent}33`, display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <span style={{ color: accent, fontSize: 12, lineHeight: 1.4 }}>ⓘ</span>
                   <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
-                    La phase d'apprentissage algorithmique dure ~2 à 6 semaines. Les gains de {biz.cplShort} des premiers mois viennent surtout de l'optimisation continue (mots-clés, audiences, créas) et se stabilisent autour de −25 % à maturité.
+                    La phase d'apprentissage algorithmique dure ~5 à 12 semaines. Les gains de {biz.cplShort} des premiers mois viennent surtout de l'optimisation continue (mots-clés, audiences, créas) et se stabilisent autour de −25 % à maturité.
                   </span>
                 </div>
                 {/* Garde-fou : signal insuffisant pour l'algorithme */}
