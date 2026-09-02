@@ -636,7 +636,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const cv = Math.round(cycleVente);
   const realizedCohorts = Math.max(1, 13 - cv); // nb de mois dont le CA tombe en année 1
   const caRealizedY1 = seasonalMonths.slice(0, realizedCohorts).reduce((s, m) => s + m.ca, 0);
-  const cycleShiftsCA = biz.hasClosing && cv > 1; // pas de décalage en e-commerce (achat immédiat)
 
   // Revenu récurrent : annualCA mesure la LTV cumulée des clients acquis sur
   // l'année (valeur générée). Le CA réellement FACTURÉ en année 1 se limite aux
@@ -649,8 +648,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         return s + m.clients * monthsBilled;
       }, 0)
     : caRealizedY1;
-  // Montre la nuance « généré vs encaissé année 1 » dès qu'elle est significative.
-  const showRealizedSplit = recurring ? billedY1 < annualCA - 0.5 : cycleShiftsCA;
+  // Détail « généré vs encaissé année 1 » affiché seulement en revenu récurrent
+  // (la LTV s'étale réellement sur plusieurs années) ; en ponctuel, le décalage
+  // lié au cycle de vente reste un détail qui n'a pas besoin d'être affiché.
+  const showRealizedSplit = recurring && billedY1 < annualCA - 0.5;
 
   const stages = [
     { label: ch.funnel[0], value: impr },
