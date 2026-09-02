@@ -1,3 +1,27 @@
+// Régions françaises (nomenclature INSEE), utilisées pour normaliser la saisie
+// de la "Zone géographique" en mode localisé : évite les doublons de formats
+// (ville, département, abréviations...) que laissait un champ texte libre.
+export const FRENCH_REGIONS = {
+  "auvergne-rhone-alpes": "Auvergne-Rhône-Alpes",
+  "bourgogne-franche-comte": "Bourgogne-Franche-Comté",
+  bretagne: "Bretagne",
+  "centre-val-de-loire": "Centre-Val de Loire",
+  corse: "Corse",
+  "grand-est": "Grand Est",
+  "hauts-de-france": "Hauts-de-France",
+  "ile-de-france": "Île-de-France",
+  normandie: "Normandie",
+  "nouvelle-aquitaine": "Nouvelle-Aquitaine",
+  occitanie: "Occitanie",
+  "pays-de-la-loire": "Pays de la Loire",
+  "paca": "Provence-Alpes-Côte d'Azur",
+  guadeloupe: "Guadeloupe",
+  guyane: "Guyane",
+  martinique: "Martinique",
+  mayotte: "Mayotte",
+  reunion: "La Réunion",
+};
+
 export const SECTORS = {
   saas: "SaaS / Tech",
   industrie: "Industrie",

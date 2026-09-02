@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { SECTORS, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES } from "./src/config/defaults";
+import { SECTORS, FRENCH_REGIONS, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES } from "./src/config/defaults";
 import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
 
 const CFG = {
@@ -438,7 +438,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
           setContactTypes([d.contactType]); // liens partagés générés avant le passage au multi-select
         }
         if (d.geoScope === "france" || d.geoScope === "localisee") setGeoScope(d.geoScope);
-        if (d.geoZone) setGeoZone(d.geoZone);
+        if (FRENCH_REGIONS[d.geoZone]) setGeoZone(d.geoZone);
         if (d.panierMoyen > 0) setPanierMoyen(d.panierMoyen);
         if (d.revenueType === "recurrent" || d.revenueType === "ponctuel") setRevenueType(d.revenueType);
         if (d.mrr > 0) setMrr(d.mrr);
@@ -894,9 +894,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   ))}
                 </div>
                 {geoScope === "localisee" && (
-                  <input type="text" value={geoZone} onChange={e => setGeoZone(e.target.value)}
-                    placeholder="Ville, département ou région"
-                    style={{ marginTop: 8, background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "8px 10px", color: "#0F332B", fontSize: 12, width: "100%", boxSizing: "border-box", outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
+                  <select value={geoZone} onChange={e => setGeoZone(e.target.value)}
+                    style={{ marginTop: 8, background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "8px 10px", color: "#0F332B", fontSize: 12, width: "100%", boxSizing: "border-box", outline: "none", cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
+                    <option value="" disabled>Choisir une région</option>
+                    {Object.entries(FRENCH_REGIONS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                  </select>
                 )}
               </Fold>
 
@@ -1147,6 +1149,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <div style={{ color: CREAM, fontSize: 20, fontWeight: 800, lineHeight: 1.1 }}>{prospect || "Nom de l'entreprise"}</div>
               <div style={{ color: "#7a9e8e", fontSize: 12, marginTop: 4 }}>
                 {website}{website ? " · " : ""}{CFG.sectors[sector]} · {ch.label}
+                {geoScope === "localisee" && geoZone ? ` · ${FRENCH_REGIONS[geoZone]}` : ""}
               </div>
             </div>
             <div style={{ color: ORANGE, fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>SEA</div>
