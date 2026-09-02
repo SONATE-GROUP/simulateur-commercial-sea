@@ -1,0 +1,20 @@
+/* Ascenseurs habillés aux couleurs de l'app plutôt que le rendu natif du
+   navigateur, sur les zones qui défilent (panneaux gauche/droit, modales). */
+
+.scroll-dark {
+  scrollbar-width: thin;
+  scrollbar-color: #2d4a3e transparent;
+}
+.scroll-dark::-webkit-scrollbar { width: 9px; height: 9px; }
+.scroll-dark::-webkit-scrollbar-track { background: transparent; }
+.scroll-dark::-webkit-scrollbar-thumb { background: #2d4a3e; border-radius: 5px; }
+.scroll-dark::-webkit-scrollbar-thumb:hover { background: #3d6151; }
+
+.scroll-light {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+.scroll-light::-webkit-scrollbar { width: 9px; height: 9px; }
+.scroll-light::-webkit-scrollbar-track { background: transparent; }
+.scroll-light::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.18); border-radius: 5px; }
+.scroll-light::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.28); }

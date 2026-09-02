@@ -1,3 +1,27 @@
+// Régions françaises (nomenclature INSEE), utilisées pour normaliser la saisie
+// de la "Zone géographique" en mode localisé : évite les doublons de formats
+// (ville, département, abréviations...) que laissait un champ texte libre.
+export const FRENCH_REGIONS = {
+  "auvergne-rhone-alpes": "Auvergne-Rhône-Alpes",
+  "bourgogne-franche-comte": "Bourgogne-Franche-Comté",
+  bretagne: "Bretagne",
+  "centre-val-de-loire": "Centre-Val de Loire",
+  corse: "Corse",
+  "grand-est": "Grand Est",
+  "hauts-de-france": "Hauts-de-France",
+  "ile-de-france": "Île-de-France",
+  normandie: "Normandie",
+  "nouvelle-aquitaine": "Nouvelle-Aquitaine",
+  occitanie: "Occitanie",
+  "pays-de-la-loire": "Pays de la Loire",
+  "paca": "Provence-Alpes-Côte d'Azur",
+  guadeloupe: "Guadeloupe",
+  guyane: "Guyane",
+  martinique: "Martinique",
+  mayotte: "Mayotte",
+  reunion: "La Réunion",
+};
+
 export const SECTORS = {
   saas: "SaaS / Tech",
   industrie: "Industrie",
@@ -179,7 +203,7 @@ export const BUSINESS_TYPES = {
     hint: "serrurier, dépannage…",
     priorityContact: "Appel téléphonique",
     defaultContact: "appel",
-    contactOptions: ["appel", "formulaire"],
+    contactOptions: ["appel", "formulaire", "rdv", "chat"],
     conversionStage: "Appels",
     generatedLabel: "Appels générés",
     objectiveLabel: "Objectif appels",
@@ -196,7 +220,7 @@ export const BUSINESS_TYPES = {
     hint: "formulaire classique",
     priorityContact: "Formulaire / Lead",
     defaultContact: "formulaire",
-    contactOptions: ["formulaire", "appel"],
+    contactOptions: ["formulaire", "appel", "rdv", "chat"],
     conversionStage: "Leads",
     generatedLabel: "Leads générés",
     objectiveLabel: "Objectif leads",
@@ -227,12 +251,15 @@ export const BUSINESS_TYPES = {
   },
 };
 
-// Type de contact : canal d'entrée du prospect / mode de conversion. Les options
-// proposées dépendent du type de business (cf. contactOptions ci-dessus), et le
-// défaut est pré-rempli (defaultContact). Modifiable manuellement.
+// Type de contact : canal(aux) d'entrée du prospect / mode de conversion.
+// Sélection multiple (un business peut recevoir des leads par plusieurs canaux
+// à la fois). Les options proposées dépendent du type de business (cf.
+// contactOptions ci-dessus), et le défaut est pré-rempli (defaultContact).
 export const CONTACT_TYPES = {
   formulaire: { label: "Formulaire" },
   appel: { label: "Appel téléphonique" },
+  rdv: { label: "Prise de RDV" },
+  chat: { label: "Conversation chat" },
   achat: { label: "Achat en ligne" },
   clickcollect: { label: "Click & collect" },
 };
