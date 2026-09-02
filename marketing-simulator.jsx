@@ -1011,9 +1011,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   step={0.1} onChange={setConv} accent={accent} display={`${conv.toFixed(1)} %`}
                   labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
                 {biz.hasClosing && (
-                  <Slider label={biz.closingLabel} value={closing} min={1} max={100}
-                    step={0.5} onChange={setClosing} accent={accent} display={`${closing.toFixed(1)} %`}
-                    labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                  <div>
+                    <Slider label={biz.closingLabel} value={closing} min={1} max={100}
+                      step={0.5} onChange={setClosing} accent={accent} display={`${closing.toFixed(1)} %`}
+                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    {biz.closingHint && (
+                      <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>{biz.closingHint}</div>
+                    )}
+                  </div>
                 )}
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
                   {/* Type de revenu : panier unique (ponctuel) ou abonnement (récurrent → LTV) */}
