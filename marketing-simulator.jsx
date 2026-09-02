@@ -909,9 +909,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     step={1} onChange={setCycleVente} accent={accent}
                     display={`${cycleVente} mois`}
                     labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
-                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
-                    Décale l'encaissement : les leads des derniers mois se concluent en année 2
-                  </div>
                 </div>
               )}
 
