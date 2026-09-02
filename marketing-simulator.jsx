@@ -622,6 +622,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   //  • Saisonnalité : en haute saison on capte plus de volume MAIS on dépense
   //    aussi davantage (le coefficient s'applique au volume ET au budget),
   //    sinon le ROI serait artificiellement gonflé par des leads « gratuits ».
+
+  // Premier mois de haute saison depuis le démarrage de la campagne (0-11,
+  // null si aucun mois de haute saison coché) : signale si la haute saison
+  // arrive avant ou après la fin de la phase d'apprentissage (mois 4, cf.
+  // LEARNING_STEPS), pour aider à caler le mois de démarrage en conséquence.
+  const firstHighSeasonIdx = seasonalityEnabled
+    ? Array.from({ length: 12 }, (_, i) => i).find(i => highSeasonMonths[(startMonth + i) % 12]) ?? null
+    : null;
+  const highSeasonBeforeMaturity = firstHighSeasonIdx != null && firstHighSeasonIdx < 3;
   const seasonalMonths = Array.from({ length: 12 }, (_, i) => {
     const calMonth = (startMonth + i) % 12;
     const high = seasonalityEnabled && highSeasonMonths[calMonth];
@@ -1230,6 +1239,18 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       style={{ width: "100%", background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" }}>
                       {MONTH_NAMES.map((m, i) => <option key={i} value={i}>{m}</option>)}
                     </select>
+                    {firstHighSeasonIdx != null && (
+                      <div style={{
+                        marginTop: 8, padding: "8px 10px", borderRadius: 7, fontSize: 10, lineHeight: 1.5,
+                        ...(highSeasonBeforeMaturity
+                          ? { background: "#a6402a14", border: "1px solid #a6402a40", color: "#7a3520" }
+                          : { background: `${accent}14`, border: `1px solid ${accent}40`, color: "rgba(0,0,0,0.55)" }),
+                      }}>
+                        {highSeasonBeforeMaturity
+                          ? `⚠ La haute saison démarre dès le mois ${firstHighSeasonIdx + 1} de la campagne, avant la fin de la phase d'apprentissage (~mois 4) : le CPL ne sera pas encore optimisé. Envisager de démarrer la campagne plus tôt.`
+                          : `✓ La haute saison démarre au mois ${firstHighSeasonIdx + 1} de la campagne, une fois la phase d'apprentissage terminée (CPL déjà optimisé).`}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
