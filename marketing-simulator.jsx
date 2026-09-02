@@ -474,11 +474,17 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.conv  > 0)   setConv(d.conv);
         if (CONVERSION_SUPPORTS[d.support]) setSupport(d.support);
         if (BUSINESS_TYPES[d.businessType]) setBusinessType(d.businessType);
+        // "appel" a été scindé en appel_annonce/appel_site : les liens générés
+        // avant cette séparation retombent sur appel_annonce par défaut.
+        const migrateContactKey = k => (k === "appel" ? "appel_annonce" : k);
         let restoredContactTypes = null;
-        if (Array.isArray(d.contactTypes) && d.contactTypes.some(k => CONTACT_TYPES[k])) {
-          restoredContactTypes = d.contactTypes.filter(k => CONTACT_TYPES[k]);
-        } else if (CONTACT_TYPES[d.contactType]) {
-          restoredContactTypes = [d.contactType]; // liens partagés générés avant le passage au multi-select
+        if (Array.isArray(d.contactTypes)) {
+          const migrated = [...new Set(d.contactTypes.map(migrateContactKey))].filter(k => CONTACT_TYPES[k]);
+          if (migrated.length) restoredContactTypes = migrated;
+        }
+        if (!restoredContactTypes) {
+          const migrated = migrateContactKey(d.contactType);
+          if (CONTACT_TYPES[migrated]) restoredContactTypes = [migrated]; // liens partagés générés avant le passage au multi-select
         }
         if (restoredContactTypes) {
           setContactTypes(restoredContactTypes);
@@ -639,11 +645,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // Répartition des leads entre types de contact (formulaire, appel, RDV...),
   // à titre indicatif : ventile le volume de leads déjà calculé, ne change
-  // aucun autre chiffre.
+  // aucun autre chiffre. contactStandard est notre référence (dossiers
+  // clients), affichée en comparaison de la répartition appliquée.
+  const contactStandard = getDefaultContactSplit(businessType, contactTypes);
   const contactBreakdown = contactTypes.map(k => ({
     key: k,
     label: CONTACT_TYPES[k]?.label ?? k,
     pct: contactSplit[k] ?? 0,
+    standardPct: contactStandard[k] ?? 0,
     leads: Math.round(leads * (contactSplit[k] ?? 0) / 100),
   }));
 
@@ -807,11 +816,27 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
       const pdfW = pdf.internal.pageSize.getWidth();
       const pdfH = pdf.internal.pageSize.getHeight();
-      const ratio = Math.min(pdfW / canvas.width, pdfH / canvas.height);
-      const imgW = canvas.width * ratio;
-      const imgH = canvas.height * ratio;
-      pdf.addImage(canvas.toDataURL("image/png"), "PNG",
-        (pdfW - imgW) / 2, (pdfH - imgH) / 2, imgW, imgH);
+      // Le rapport peut être plus haut qu'une page (courbe d'apprentissage,
+      // répartition par contact, effet halo...) : on cale sur la largeur de
+      // page puis on découpe sur plusieurs pages plutôt que de tout écraser
+      // sur une seule, ce qui rendait le texte illisible.
+      const pxPerMm = canvas.width / pdfW;
+      const pageHeightPx = Math.max(1, Math.floor(pdfH * pxPerMm));
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.width = canvas.width;
+      const ctx = pageCanvas.getContext("2d");
+      let renderedPx = 0;
+      let firstPage = true;
+      while (renderedPx < canvas.height) {
+        const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
+        pageCanvas.height = sliceHeightPx;
+        ctx.clearRect(0, 0, pageCanvas.width, sliceHeightPx);
+        ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+        if (!firstPage) pdf.addPage();
+        pdf.addImage(pageCanvas.toDataURL("image/png"), "PNG", 0, 0, pdfW, sliceHeightPx / pxPerMm);
+        renderedPx += sliceHeightPx;
+        firstPage = false;
+      }
       pdf.save(`${exportFileName}.pdf`);
     } finally {
       setExporting(false);
@@ -1022,12 +1047,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 </div>
                 {contactTypes.length > 1 && (
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginBottom: 8 }}>Répartition estimée des leads</div>
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginBottom: 8 }}>Répartition appliquée <span style={{ color: "rgba(0,0,0,0.3)" }}>· en gris, notre standard</span></div>
                     {contactTypes.map(k => (
                       <div key={k} style={{ marginBottom: 8 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
                           <span style={{ fontSize: 11, color: "rgba(0,0,0,0.5)" }}>{CONTACT_TYPES[k]?.label ?? k}</span>
-                          <span style={{ fontSize: 11, fontWeight: 600, color: accent }}>{Math.round(contactSplit[k] ?? 0)} %</span>
+                          <span style={{ fontSize: 11 }}>
+                            <span style={{ fontWeight: 600, color: accent }}>{Math.round(contactSplit[k] ?? 0)} %</span>
+                            <span style={{ color: "rgba(0,0,0,0.32)", marginLeft: 6 }}>({Math.round(contactStandard[k] ?? 0)} % standard)</span>
+                          </span>
                         </div>
                         <input type="range" min={0} max={100} step={1} value={Math.round(contactSplit[k] ?? 0)}
                           onChange={e => updateContactSplit(k, Number(e.target.value))}
@@ -1515,13 +1543,19 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     <div key={c.key} style={{ width: `${c.pct}%`, background: palette[i % palette.length], minWidth: c.pct > 0 ? 2 : 0 }} title={`${c.label} : ${Math.round(c.pct)}%`} />
                   ))}
                 </div>
+                <div style={{ display: "flex", width: "100%", height: 10, borderRadius: 4, overflow: "hidden", marginTop: 5 }}>
+                  {contactBreakdown.map((c, i) => (
+                    <div key={c.key} style={{ width: `${c.standardPct}%`, background: `rgba(255,255,255,${(0.42 - i * 0.06).toFixed(2)})`, minWidth: c.standardPct > 0 ? 2 : 0 }} title={`${c.label} (standard) : ${Math.round(c.standardPct)}%`} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", marginTop: 5 }}>Répartition appliquée · en dessous (gris), notre standard sur ce type de business</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 14 }}>
                   {contactBreakdown.map((c, i) => (
                     <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 7 }}>
                       <span style={{ width: 9, height: 9, borderRadius: 2, background: palette[i % palette.length], flexShrink: 0 }} />
                       <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>{c.label}</span>
                       <span style={{ fontSize: 11, fontWeight: 700, color: CREAM }}>{Math.round(c.pct)}%</span>
-                      <span style={{ fontSize: 10, color: "#5a7a6a" }}>({fmtLeads(c.leads)} {biz.conversionStage.toLowerCase()})</span>
+                      <span style={{ fontSize: 10, color: "#5a7a6a" }}>({fmtLeads(c.leads)} {biz.conversionStage.toLowerCase()} · standard {Math.round(c.standardPct)}%)</span>
                     </div>
                   ))}
                 </div>

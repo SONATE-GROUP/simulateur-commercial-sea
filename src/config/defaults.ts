@@ -234,8 +234,8 @@ export const BUSINESS_TYPES = {
     label: "Business d'urgence",
     hint: "serrurier, dépannage…",
     priorityContact: "Appel téléphonique",
-    defaultContact: "appel",
-    contactOptions: ["appel", "formulaire", "rdv", "chat"],
+    defaultContact: "appel_annonce",
+    contactOptions: ["appel_annonce", "appel_site", "formulaire", "rdv", "chat"],
     conversionStage: "Appels",
     generatedLabel: "Appels générés",
     objectiveLabel: "Objectif appels",
@@ -252,7 +252,7 @@ export const BUSINESS_TYPES = {
     hint: "formulaire classique",
     priorityContact: "Formulaire / Lead",
     defaultContact: "formulaire",
-    contactOptions: ["formulaire", "appel", "rdv", "chat"],
+    contactOptions: ["formulaire", "appel_annonce", "appel_site", "rdv", "chat"],
     conversionStage: "Leads",
     generatedLabel: "Leads générés",
     objectiveLabel: "Objectif leads",
@@ -270,7 +270,7 @@ export const BUSINESS_TYPES = {
     hint: "logique panier",
     priorityContact: "Achat en ligne (panier)",
     defaultContact: "achat",
-    contactOptions: ["achat", "clickcollect", "appel"],
+    contactOptions: ["achat", "clickcollect", "appel_annonce", "appel_site"],
     conversionStage: "Commandes",
     generatedLabel: "Commandes générées",
     objectiveLabel: "Objectif commandes",
@@ -290,22 +290,26 @@ export const BUSINESS_TYPES = {
 // contactOptions ci-dessus), et le défaut est pré-rempli (defaultContact).
 export const CONTACT_TYPES = {
   formulaire: { label: "Formulaire" },
-  appel: { label: "Appel téléphonique" },
+  appel_annonce: { label: "Appel annonce" },
+  appel_site: { label: "Appel site/landing" },
   rdv: { label: "Prise de RDV" },
   chat: { label: "Conversation chat" },
   achat: { label: "Achat en ligne" },
   clickcollect: { label: "Click & collect" },
 };
 
-// Répartition par défaut des leads entre types de contact, par business type
-// (en %, somme = 100 sur l'ensemble des contactOptions du business). Hypothèses
-// de départ à ajuster au cas par cas : un business d'urgence reçoit surtout des
-// appels, un e-commerce surtout des achats directs, un lead classique un mix
-// formulaire/appel avec RDV et chat en appoint.
+// Répartition "standard" des leads entre types de contact, par business type
+// (en %, somme = 100 sur l'ensemble des contactOptions du business). Sert de
+// point de départ (pré-remplit la répartition appliquée) ET de référence
+// affichée en grisé pour comparaison, une fois appliquée à l'ensemble des
+// types sélectionnés (cf. getDefaultContactSplit ci-dessous).
+// Repères issus de dossiers réels quand disponibles (lead : 9 appels annonces
+// + 23 appels site + 34 RDV = 66, soit 14/35/51%) ; sinon hypothèses de
+// départ à ajuster au cas par cas.
 export const CONTACT_SPLIT_DEFAULTS = {
-  urgence: { appel: 90, formulaire: 10, rdv: 0, chat: 0 },
-  lead: { formulaire: 55, appel: 25, rdv: 12, chat: 8 },
-  ecommerce: { achat: 85, clickcollect: 10, appel: 5 },
+  urgence: { appel_annonce: 55, appel_site: 35, formulaire: 10, rdv: 0, chat: 0 },
+  lead: { appel_annonce: 14, appel_site: 35, rdv: 51, formulaire: 0, chat: 0 },
+  ecommerce: { achat: 85, clickcollect: 10, appel_site: 5, appel_annonce: 0 },
 };
 
 // Répartition par défaut, ramenée aux seuls types de contact sélectionnés
