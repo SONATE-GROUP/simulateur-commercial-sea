@@ -828,8 +828,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <div style={{ borderTop: "1px solid rgba(0,0,0,0.08)", marginBottom: 14 }} />
 
               {/* Type de business */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Type de business</div>
+              <Fold title="Type de business">
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {Object.entries(BUSINESS_TYPES).map(([k, b]) => (
                     <button key={k} onClick={() => { setBusinessType(k); setContactType(b.defaultContact); }} style={{
@@ -845,11 +844,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     </button>
                   ))}
                 </div>
-              </div>
+              </Fold>
 
               {/* Type de contact (pré-rempli selon le type de business) */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Type de contact</div>
+              <Fold title="Type de contact">
                 <div style={{ display: "flex", gap: 6 }}>
                   {(biz.contactOptions ?? Object.keys(CONTACT_TYPES)).map((k) => (
                     <button key={k} onClick={() => setContactType(k)} style={{
@@ -862,11 +860,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     }}>{CONTACT_TYPES[k]?.label ?? k}</button>
                   ))}
                 </div>
-              </div>
+              </Fold>
 
               {/* Zone géographique */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Zone géographique</div>
+              <Fold title="Zone géographique">
                 <div style={{ display: "flex", gap: 6 }}>
                   {[["france", "Toute la France"], ["localisee", "Localisée"]].map(([k, l]) => (
                     <button key={k} onClick={() => setGeoScope(k)} style={{
@@ -884,7 +881,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     placeholder="Ville, département ou région"
                     style={{ marginTop: 8, background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "8px 10px", color: "#0F332B", fontSize: 12, width: "100%", boxSizing: "border-box", outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
                 )}
-              </div>
+              </Fold>
 
               {/* Durée du cycle de vente — sans objet pour l'e-commerce (achat immédiat) */}
               {businessType !== "ecommerce" && (
