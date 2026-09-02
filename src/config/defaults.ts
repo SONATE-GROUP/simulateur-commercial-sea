@@ -231,6 +231,7 @@ export const BUSINESS_TYPES = {
     finalSingular: "client",
     hasClosing: true,
     closingLabel: "Taux de closing (%)",
+    closingHint: "Pourcentage de leads qui deviennent clients : prise de RDV, rendez-vous R2/R3 et validation du devis inclus.",
   },
   ecommerce: {
     label: "E-commerce",

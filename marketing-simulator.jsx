@@ -358,6 +358,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [mrr, setMrr]                 = useState(50);  // revenu mensuel par client (récurrent)
   const [lifetime, setLifetime]       = useState(24); // durée de vie client (mois)
   const [marge, setMarge]             = useState(getSectorMargin("saas"));
+  const [margeEnabled, setMargeEnabled] = useState(true);
   const [closing, setClosing]         = useState(20);
   const [cycleVente, setCycleVente]   = useState(1);
   const [seasonalityEnabled, setSeasonalityEnabled] = useState(false);
@@ -444,6 +445,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.mrr > 0) setMrr(d.mrr);
         if (d.lifetime >= 1) setLifetime(d.lifetime);
         if (d.marge >= 0 && d.marge <= 100) setMarge(d.marge);
+        if (typeof d.margeEnabled === "boolean") setMargeEnabled(d.margeEnabled);
         if (d.closing > 0)     setClosing(d.closing);
         if (d.cycleVente >= 1 && d.cycleVente <= 12) setCycleVente(d.cycleVente);
         if (typeof d.seasonalityEnabled === "boolean") setSeasonalityEnabled(d.seasonalityEnabled);
@@ -540,10 +542,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // ROI net = profit réel rapporté au budget, une fois la marge produit déduite.
   // Un ROAS de x1 n'est PAS rentable : il faut couvrir le coût de revient (1 − marge).
   const roas   = spend > 0 ? caPotentiel / spend : 0;
-  const profit = caPotentiel * marge / 100 - spend;
+  // Marge desactivable : le sujet peut ne pas etre pertinent selon le business
+  // (marge inconnue, service pur...). Desactivee, le ROI net est calcule sur
+  // le CA brut, sans deduction de cout de revient.
+  const effectiveMarge = margeEnabled ? marge : 100;
+  const profit = caPotentiel * effectiveMarge / 100 - spend;
   const roiPct = spend > 0 ? (profit / spend) * 100 : 0;
   // Seuil de rentabilité : ROAS minimal pour que la marge couvre la dépense.
-  const breakEvenRoas = marge > 0 ? 100 / marge : Infinity;
+  const breakEvenRoas = effectiveMarge > 0 ? 100 / effectiveMarge : Infinity;
 
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
   const learningData = LEARNING_STEPS.map(s => ({ ...s, cpl: cpl * s.mult }));
@@ -589,7 +595,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const annualCA      = seasonalMonths.reduce((s, m) => s + m.ca, 0);
   const annualSpend   = seasonalMonths.reduce((s, m) => s + m.spend, 0);
   const annualRoas    = annualSpend > 0 ? annualCA / annualSpend : 0;
-  const annualRoiPct  = annualSpend > 0 ? (annualCA * marge / 100 - annualSpend) / annualSpend * 100 : 0;
+  const annualRoiPct  = annualSpend > 0 ? (annualCA * effectiveMarge / 100 - annualSpend) / annualSpend * 100 : 0;
   const maxMonthLeads = Math.max(...seasonalMonths.map(m => m.leads), 1);
 
   // Cycle de vente : un lead du mois i se conclut ~ (cycleVente − 1) mois plus
@@ -682,7 +688,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, support, businessType, contactTypes, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, highSeasonMultiplier, prospect, website }));
     const linkId = genLinkId();
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
@@ -1011,9 +1017,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   step={0.1} onChange={setConv} accent={accent} display={`${conv.toFixed(1)} %`}
                   labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
                 {biz.hasClosing && (
-                  <Slider label={biz.closingLabel} value={closing} min={1} max={100}
-                    step={0.5} onChange={setClosing} accent={accent} display={`${closing.toFixed(1)} %`}
-                    labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                  <div>
+                    <Slider label={biz.closingLabel} value={closing} min={1} max={100}
+                      step={0.5} onChange={setClosing} accent={accent} display={`${closing.toFixed(1)} %`}
+                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    {biz.closingHint && (
+                      <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>{biz.closingHint}</div>
+                    )}
+                  </div>
                 )}
                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
                   {/* Type de revenu : panier unique (ponctuel) ou abonnement (récurrent → LTV) */}
@@ -1066,13 +1077,25 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     </>
                   )}
 
-                  <div style={{ marginTop: 14 }}>
-                    <Slider label="Marge brute (%)" value={marge} min={1} max={100}
-                      step={1} onChange={setMarge} accent={accent} display={`${Math.round(marge)} %`}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
-                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
-                      Part du {recurring ? "revenu" : "panier"} qui reste après coût de revient — pré-remplie selon le secteur, à ajuster au client. Sert au ROI net.
+                  <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: margeEnabled ? 10 : 0 }}>
+                      <span style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 0 }}>Marge brute</span>
+                      <button onClick={() => setMargeEnabled(v => !v)} title={margeEnabled ? "Désactiver" : "Activer"}
+                        style={{ width: 38, height: 20, borderRadius: 11, border: "none", cursor: "pointer", flexShrink: 0,
+                          background: margeEnabled ? accent : "rgba(0,0,0,0.18)", position: "relative", transition: "background .2s" }}>
+                        <span style={{ position: "absolute", top: 3, left: margeEnabled ? 21 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+                      </button>
                     </div>
+                    {margeEnabled && (
+                      <>
+                        <Slider label="Marge brute (%)" value={marge} min={1} max={100}
+                          step={1} onChange={setMarge} accent={accent} display={`${Math.round(marge)} %`}
+                          labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                        <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
+                          Montant qui reste hors achat du produit vendu, à définir selon la règle de marge appliquée par le client.
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1179,7 +1202,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${roiPct >= 0 ? G3 : "#a6402a"}` }}>
                 <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROI net</div>
                 <div style={{ color: roiPct >= 0 ? "#4caf50" : ORANGE, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{roiPct >= 0 ? "+" : ""}{Math.round(roiPct)}%</div>
-                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>après marge {Math.round(marge)}% · {roiPct >= 0 ? "rentable" : "non rentable"}</div>
+                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
+                  {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {roiPct >= 0 ? "rentable" : "non rentable"}
+                </div>
               </div>
             </div>
           </div>
