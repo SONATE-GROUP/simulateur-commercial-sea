@@ -816,11 +816,27 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
       const pdfW = pdf.internal.pageSize.getWidth();
       const pdfH = pdf.internal.pageSize.getHeight();
-      const ratio = Math.min(pdfW / canvas.width, pdfH / canvas.height);
-      const imgW = canvas.width * ratio;
-      const imgH = canvas.height * ratio;
-      pdf.addImage(canvas.toDataURL("image/png"), "PNG",
-        (pdfW - imgW) / 2, (pdfH - imgH) / 2, imgW, imgH);
+      // Le rapport peut être plus haut qu'une page (courbe d'apprentissage,
+      // répartition par contact, effet halo...) : on cale sur la largeur de
+      // page puis on découpe sur plusieurs pages plutôt que de tout écraser
+      // sur une seule, ce qui rendait le texte illisible.
+      const pxPerMm = canvas.width / pdfW;
+      const pageHeightPx = Math.max(1, Math.floor(pdfH * pxPerMm));
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.width = canvas.width;
+      const ctx = pageCanvas.getContext("2d");
+      let renderedPx = 0;
+      let firstPage = true;
+      while (renderedPx < canvas.height) {
+        const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
+        pageCanvas.height = sliceHeightPx;
+        ctx.clearRect(0, 0, pageCanvas.width, sliceHeightPx);
+        ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+        if (!firstPage) pdf.addPage();
+        pdf.addImage(pageCanvas.toDataURL("image/png"), "PNG", 0, 0, pdfW, sliceHeightPx / pxPerMm);
+        renderedPx += sliceHeightPx;
+        firstPage = false;
+      }
       pdf.save(`${exportFileName}.pdf`);
     } finally {
       setExporting(false);
