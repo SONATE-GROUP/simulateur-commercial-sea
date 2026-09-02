@@ -727,6 +727,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   const hInput = { background: "#f5f5f5", border: "1px solid #ddd", borderRadius: 6, padding: "8px 11px", color: "#1a3a2a", fontSize: 13, outline: "none", flex: 1, minWidth: 0, boxSizing: "border-box", fontFamily: "'Inter',sans-serif" };
   const hOutBtn = { background: "transparent", border: `1px solid ${G3}`, borderRadius: 6, padding: "8px 14px", color: G2, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "'Inter',sans-serif" };
+  const hIconBtn = { ...hOutBtn, width: 34, height: 34, padding: 0, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: G, color: CREAM, fontFamily: "'Inter',sans-serif" }}>
@@ -745,9 +746,25 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
           </select>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          {canSave && <button onClick={handleShare} style={{ ...hOutBtn, border: `1px solid ${copied ? "#4caf50" : G3}`, color: copied ? "#4caf50" : G2 }}>{copied ? "✓ Enregistré !" : "💾 Enregistrer"}</button>}
-          {user && <button onClick={openMyReports} style={hOutBtn}>📂 Mes rapports</button>}
-          {onOpenBackOffice && <button onClick={onOpenBackOffice} style={hOutBtn}>⚙️ Back-office</button>}
+          {canSave && (
+            <button onClick={handleShare} title={copied ? "Enregistré !" : "Enregistrer"} style={{ ...hIconBtn, border: `1px solid ${copied ? "#4caf50" : G3}`, color: copied ? "#4caf50" : G2 }}>
+              {copied ? (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg>
+              )}
+            </button>
+          )}
+          {user && (
+            <button onClick={openMyReports} title="Mes rapports" style={hIconBtn}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+            </button>
+          )}
+          {onOpenBackOffice && (
+            <button onClick={onOpenBackOffice} title="Back-office" style={hIconBtn}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+            </button>
+          )}
           <button onClick={handleExportPdf} disabled={exporting} style={{ background: ORANGE, border: "none", borderRadius: 6, padding: "8px 16px", color: "#fff", fontSize: 13, fontWeight: 700, cursor: exporting ? "default" : "pointer", whiteSpace: "nowrap", fontFamily: "'Inter',sans-serif", opacity: exporting ? 0.7 : 1 }}>↓ {exporting ? "Export…" : "Exporter PDF"}</button>
           {consultation && <span style={{ fontSize: 11, color: "#8a9e98", whiteSpace: "nowrap" }}>Mode consultation</span>}
           {user?.role === "Lecteur" && <span style={{ fontSize: 11, color: "#8a9e98", whiteSpace: "nowrap" }}>Lecture seule</span>}
