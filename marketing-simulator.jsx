@@ -752,9 +752,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
           {consultation && <span style={{ fontSize: 11, color: "#8a9e98", whiteSpace: "nowrap" }}>Mode consultation</span>}
           {user?.role === "Lecteur" && <span style={{ fontSize: 11, color: "#8a9e98", whiteSpace: "nowrap" }}>Lecture seule</span>}
           {user && (
-            <button onClick={onLogout} title={user.email} style={{ ...hOutBtn, display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={onLogout} title={`Déconnexion (${user.name || user.email})`} style={{ ...hOutBtn, display: "flex", alignItems: "center", gap: 6 }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
-              {(user.name || user.email || "").split(" ")[0]}
+              Déconnexion
             </button>
           )}
         </div>
