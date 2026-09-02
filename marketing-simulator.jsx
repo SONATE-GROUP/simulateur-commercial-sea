@@ -741,9 +741,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         <div style={{ display: "flex", gap: 8, flex: 1, minWidth: 260 }}>
           <input value={prospect} onChange={e => setProspect(e.target.value)} placeholder="Nom de l'entreprise" style={hInput} />
           <input value={website} onChange={e => setWebsite(e.target.value)} onBlur={e => fetchLogoFromWebsite(e.target.value)} placeholder="URL du site" style={hInput} />
-          <select value={sector} onChange={e => setSector(e.target.value)} style={{ ...hInput, cursor: "pointer" }}>
-            {Object.entries(CFG.sectors).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-          </select>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           {canSave && (
