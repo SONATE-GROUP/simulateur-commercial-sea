@@ -148,28 +148,20 @@ function Funnel({ stages, color }) {
   );
 }
 
-// ─── Range slider with colored track ─────────────────────────
-function Slider({ label, value, min, max, step, onChange, accent, display, labelColor, trackBg }) {
-  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+// ─── Curseur natif, habillé aux couleurs du canal (comme le SEO) ──
+function Slider({ label, value, min, max, step, onChange, accent, display }) {
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-        <span style={{ fontSize: 11, color: labelColor ?? "rgba(255,255,255,0.38)" }}>{label}</span>
+        <span style={{ fontSize: 11, color: "rgba(0,0,0,0.45)" }}>{label}</span>
         <span style={{ fontSize: 11, fontWeight: 600, color: accent }}>{display}</span>
       </div>
-      <div style={{ position: "relative", height: 16, display: "flex", alignItems: "center" }}>
-        <div style={{ position: "absolute", width: "100%", height: 3, background: trackBg ?? "rgba(255,255,255,0.08)", borderRadius: 2 }}>
-          <div style={{ width: `${pct}%`, height: "100%", background: accent, borderRadius: 2 }} />
-        </div>
-        <div style={{
-          position: "absolute", left: `${pct}%`, transform: "translateX(-50%)",
-          width: 13, height: 13, borderRadius: "50%", background: accent,
-          boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
-          pointerEvents: "none", transition: "left 0.05s",
-        }} />
-        <input type="range" min={min} max={max} step={step} value={value}
-          onChange={e => onChange(Number(e.target.value))}
-          style={{ position: "absolute", width: "100%", opacity: 0, cursor: "pointer", height: "100%", margin: 0 }} />
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={e => onChange(Number(e.target.value))} className="slider-light"
+        style={{ width: "100%", "--thumb": accent }} />
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+        <span style={{ fontSize: 10, color: "rgba(0,0,0,0.3)" }}>{min}</span>
+        <span style={{ fontSize: 10, color: "rgba(0,0,0,0.3)" }}>{max}</span>
       </div>
     </div>
   );
@@ -955,9 +947,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: G, color: CREAM, fontFamily: "'Inter',sans-serif" }}>
       {/* ── HEADER ── */}
-      <header style={{ background: "#fff", borderBottom: "1px solid #e8e8e8", padding: "0 20px", minHeight: 80, display: "flex", alignItems: "center", gap: 18, flexShrink: 0, flexWrap: "wrap" }}>
-        <div style={{ position: "relative", width: 230, height: 60, flexShrink: 0 }}>
-          <div style={{ backgroundImage: "url(/logo-sonate.png)", backgroundRepeat: "no-repeat", backgroundSize: "248px auto", backgroundPosition: "-4px -10px", width: "100%", height: "100%" }} role="img" aria-label="Sonate" />
+      <header style={{ background: "#fff", borderBottom: "1px solid #e8e8e8", padding: "0 24px", height: 80, display: "flex", alignItems: "center", gap: 20, flexShrink: 0, flexWrap: "wrap" }}>
+        <div style={{ position: "relative", width: 252, height: 65, flexShrink: 0 }}>
+          <div style={{ backgroundImage: "url(/logo-sonate.png)", backgroundRepeat: "no-repeat", backgroundSize: "270px auto", backgroundPosition: "-5px -12px", width: "100%", height: "100%" }} role="img" aria-label="Sonate" />
           <span style={{ position: "absolute", top: 2, right: 0, fontSize: 8, fontWeight: 800, letterSpacing: "0.14em", color: ORANGE, lineHeight: 1 }}>Simulateur SEA/SMA</span>
         </div>
         <div style={{ width: 1, height: 40, background: "#e0e0e0", flexShrink: 0 }} />
@@ -1001,7 +993,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
         {/* ── LEFT PANEL (cream) ── */}
-        <div className="scroll-light" style={{ width: 380, minWidth: 380, overflowY: "auto", borderRight: `1px solid ${L_BORD}`, padding: "16px 16px 28px", background: CREAM }}>
+        <div className="scroll-light" style={{ width: 400, minWidth: 400, overflowY: "auto", borderRight: `1px solid ${L_BORD}`, padding: "14px 14px 20px", background: CREAM }}>
               {/* Canal */}
               <div style={{ background: "rgba(255,255,255,0.65)", border: "1px solid #ddd5c8", borderRadius: 10, padding: 16, marginBottom: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, letterSpacing: "0.09em", color: "#1e3328", textTransform: "uppercase", marginBottom: 10 }}>
@@ -1095,7 +1087,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                         </div>
                         <input type="range" min={0} max={100} step={1} value={Math.round(contactSplit[k] ?? 0)}
                           onChange={e => updateContactSplit(k, Number(e.target.value))} className="slider-light"
-                          style={{ width: "100%", accentColor: accent }} />
+                          style={{ width: "100%", accentColor: accent, "--thumb": accent }} />
                       </div>
                     ))}
                   </div>
@@ -1130,8 +1122,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ marginBottom: 16 }}>
                   <Slider label="Durée du cycle de vente" value={cycleVente} min={1} max={12}
                     step={1} onChange={setCycleVente} accent={accent}
-                    display={`${cycleVente} mois`}
-                    labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    display={`${cycleVente} mois`} />
                 </div>
               )}
 
@@ -1154,7 +1145,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       style={{ background: "transparent", border: "none", outline: "none", fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: 34, color: "#0F332B", letterSpacing: "-0.03em", width: "100%" }} />
                     <input type="range" min={100} max={50000} step={100} value={budget}
                       onChange={e => setBudget(Number(e.target.value))} className="slider-light"
-                      style={{ width: "100%", marginTop: 10, accentColor: accent }} />
+                      style={{ width: "100%", marginTop: 10, accentColor: accent, "--thumb": accent }} />
                   </>
                 ) : (
                   <>
@@ -1163,7 +1154,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       style={{ background: "transparent", border: "none", outline: "none", fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: 34, color: "#0F332B", letterSpacing: "-0.03em", width: "100%" }} />
                     <input type="range" min={1} max={500} step={1} value={tLeads}
                       onChange={e => setTLeads(Number(e.target.value))} className="slider-light"
-                      style={{ width: "100%", marginTop: 10, accentColor: accent }} />
+                      style={{ width: "100%", marginTop: 10, accentColor: accent, "--thumb": accent }} />
                   </>
                 )}
               </div>
@@ -1198,20 +1189,17 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 {billing === "cpc"
                   ? (ch.cpcLabel && (
                     <Slider label={ch.cpcLabel} value={cpc} min={ch.cpcStep} max={ch.cpcMax}
-                      step={ch.cpcStep} onChange={setCpc} accent={accent} display={cpcDisplay}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      step={ch.cpcStep} onChange={setCpc} accent={accent} display={cpcDisplay} />
                   ))
                   : billing === "cpm"
                   ? (
                     <Slider label={ch.cpmLabel ?? "CPM (€)"} value={cpm} min={ch.cpmStep ?? 0.5} max={ch.cpmMax ?? 60}
-                      step={ch.cpmStep ?? 0.5} onChange={setCpm} accent={accent} display={cpmDisplay}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      step={ch.cpmStep ?? 0.5} onChange={setCpm} accent={accent} display={cpmDisplay} />
                   )
                   : (
                     <>
                       <Slider label={`${biz.contactCostLabel} constaté (€)`} value={cplTarget} min={1} max={1000}
-                        step={1} onChange={setCplTarget} accent={accent} display={cplDisplay}
-                        labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                        step={1} onChange={setCplTarget} accent={accent} display={cplDisplay} />
                       <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
                         Coût observé chez un confrère ou basé sur votre expérience, plutôt qu'estimé via CPC/CTR/conversion.
                       </div>
@@ -1219,8 +1207,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   )}
                 {ch.showCtr && (
                   <Slider label={ch.ctrLabel} value={ctr} min={0.1} max={ch.ctrMax}
-                    step={0.1} onChange={setCtr} accent={accent} display={`${ctr.toFixed(1)} %`}
-                    labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                    step={0.1} onChange={setCtr} accent={accent} display={`${ctr.toFixed(1)} %`} />
                 )}
                 {/* Cohérence des leviers : CPC, CTR et CPM sont liés
                     (CPM = CPC × CTR × 10). On affiche la métrique implicite du
@@ -1256,13 +1243,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </div>
                 </div>
                 <Slider label="Taux de conversion (%)" value={conv} min={0.1} max={20}
-                  step={0.1} onChange={setConv} accent={accent} display={`${conv.toFixed(1)} %`}
-                  labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                  step={0.1} onChange={setConv} accent={accent} display={`${conv.toFixed(1)} %`} />
                 {biz.hasClosing && (
                   <div>
                     <Slider label={biz.closingLabel} value={closing} min={1} max={100}
-                      step={0.5} onChange={setClosing} accent={accent} display={`${closing.toFixed(1)} %`}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      step={0.5} onChange={setClosing} accent={accent} display={`${closing.toFixed(1)} %`} />
                     {biz.closingHint && (
                       <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>{biz.closingHint}</div>
                     )}
@@ -1291,7 +1276,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       </div>
                       <input type="range" min={1} max={10000} step={1} value={panierMoyen}
                         onChange={e => setPanierMoyen(Number(e.target.value))} className="slider-light"
-                        style={{ width: "100%", accentColor: accent }} />
+                        style={{ width: "100%", accentColor: accent, "--thumb": accent }} />
                       <input type="number" value={panierMoyen} min={1}
                         onChange={e => setPanierMoyen(Math.max(1, Number(e.target.value)))}
                         style={{ marginTop: 6, background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 6, padding: "4px 8px", color: "#0F332B", fontSize: 12, width: "100%", outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
@@ -1304,14 +1289,13 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       </div>
                       <input type="range" min={1} max={2000} step={1} value={mrr}
                         onChange={e => setMrr(Number(e.target.value))} className="slider-light"
-                        style={{ width: "100%", accentColor: accent }} />
+                        style={{ width: "100%", accentColor: accent, "--thumb": accent }} />
                       <input type="number" value={mrr} min={1}
                         onChange={e => setMrr(Math.max(1, Number(e.target.value)))}
                         style={{ marginTop: 6, background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 6, padding: "4px 8px", color: "#0F332B", fontSize: 12, width: "100%", outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
                       <div style={{ marginTop: 12 }}>
                         <Slider label="Durée de vie client (mois)" value={lifetime} min={1} max={60}
-                          step={1} onChange={setLifetime} accent={accent} display={`${lifetime} mois`}
-                          labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                          step={1} onChange={setLifetime} accent={accent} display={`${lifetime} mois`} />
                       </div>
                       <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginTop: -4 }}>
                         Valeur vie client (LTV) : <strong>{fmtC(mrr * lifetime)}</strong> ({mrr.toLocaleString("fr-FR")} € × {lifetime} mois)
@@ -1331,8 +1315,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     {margeEnabled && (
                       <>
                         <Slider label="Marge brute (%)" value={marge} min={1} max={100}
-                          step={1} onChange={setMarge} accent={accent} display={`${Math.round(marge)} %`}
-                          labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                          step={1} onChange={setMarge} accent={accent} display={`${Math.round(marge)} %`} />
                         <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
                           Montant qui reste hors achat du produit vendu, à définir selon la règle de marge appliquée par le client.
                         </div>
@@ -1355,8 +1338,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 {haloEnabled && (
                   <>
                     <Slider label="Taux de retour marque" value={haloRate} min={0} max={2}
-                      step={0.05} onChange={setHaloRate} accent={accent} display={`${haloRate.toFixed(2)} %`}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      step={0.05} onChange={setHaloRate} accent={accent} display={`${haloRate.toFixed(2)} %`} />
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
                       Parmi les clics qui n'ont pas converti tout de suite, part estimée qui revient plus tard via une recherche de marque ou la fiche Google (GMB). Estimation à part : n'affecte pas le CPL ni le ROI affichés ailleurs.
                     </div>
@@ -1406,16 +1388,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
                     {/* Coefficient marché */}
                     <Slider label="Coefficient marché (demande)" value={marketMultiplier} min={1} max={6}
-                      step={0.5} onChange={setMarketMultiplier} accent={accent} display={`×${marketMultiplier.toFixed(1)}`}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      step={0.5} onChange={setMarketMultiplier} accent={accent} display={`×${marketMultiplier.toFixed(1)}`} />
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
                       À quel point le marché est plus gros en haute saison (plus de recherches, CPL plus bas). N'augmente pas le budget à lui seul.
                     </div>
 
                     {/* Coefficient budget */}
                     <Slider label="Coefficient budget investi" value={budgetMultiplier} min={1} max={6}
-                      step={0.5} onChange={setBudgetMultiplier} accent={accent} display={`×${budgetMultiplier.toFixed(1)}`}
-                      labelColor="rgba(0,0,0,0.45)" trackBg="rgba(0,0,0,0.1)" />
+                      step={0.5} onChange={setBudgetMultiplier} accent={accent} display={`×${budgetMultiplier.toFixed(1)}`} />
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
                       Ce que vous choisissez d'investir en plus en haute saison. Laisser à ×1 pour ne pas augmenter le budget malgré un marché plus gros.
                     </div>
