@@ -16,7 +16,7 @@ export default async function handler(req, res) {
   if (!linkId) return res.status(400).json({ error: "linkId requis." });
 
   try {
-    await upsertReportMeta(linkId, { label, website, espace, state });
+    await upsertReportMeta(linkId, { label, website, espace, state, createdBy: user.email });
   } catch (e) {
     return res.status(500).json({ error: String(e) });
   }

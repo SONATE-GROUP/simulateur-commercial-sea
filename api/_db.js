@@ -37,6 +37,10 @@ function ready() {
       for (const col of ["first_login TEXT", "last_login TEXT", "login_count INTEGER", "time_spent INTEGER"]) {
         try { await client().execute(`ALTER TABLE users ADD COLUMN ${col}`); } catch { /* colonne déjà présente */ }
       }
+      // created_by : identifie l'auteur d'un rapport, pour que "Mes rapports"
+      // puisse les retrouver même sans espace assigné (pas seulement ceux des
+      // espaces dont l'utilisateur est membre).
+      try { await client().execute("ALTER TABLE reports ADD COLUMN created_by TEXT"); } catch { /* colonne déjà présente */ }
       for (const email of BOOTSTRAP_ADMINS) {
         await client().execute({ sql: "UPDATE users SET role='Admin' WHERE lower(email)=lower(?)", args: [email] });
       }
@@ -122,11 +126,13 @@ async function getReportRaw(id) { const r = await ex("SELECT * FROM reports WHER
 export async function upsertReportMeta(id, m) {
   const cur = await getReportRaw(id);
   if (cur) {
+    // created_by n'est jamais réécrit à la mise à jour : l'auteur d'un
+    // rapport reste celui qui l'a créé la première fois.
     await ex("UPDATE reports SET label=?, website=?, espace=?, state=COALESCE(?,state) WHERE id=?",
       [m.label || cur.label || "Sans nom", m.website || cur.website || "", m.espace || cur.espace || "—", m.state || null, id]);
   } else {
-    await ex("INSERT INTO reports(id,label,website,espace,state,created_at,visits) VALUES(?,?,?,?,?,?,?)",
-      [id, m.label || "Sans nom", m.website || "", m.espace || "—", m.state || null, m.createdAt || new Date().toISOString(), "{}"]);
+    await ex("INSERT INTO reports(id,label,website,espace,state,created_at,visits,created_by) VALUES(?,?,?,?,?,?,?,?)",
+      [id, m.label || "Sans nom", m.website || "", m.espace || "—", m.state || null, m.createdAt || new Date().toISOString(), "{}", m.createdBy || null]);
   }
 }
 export async function setReportVisit(id, visitId, duration) {
@@ -146,7 +152,7 @@ export async function listReports() {
     let v = {}; try { v = JSON.parse(x.visits || "{}"); } catch { /* */ }
     const visits = Object.values(v);
     const last = visits.length ? visits.reduce((a, b) => (new Date(b.ts) > new Date(a.ts) ? b : a)) : null;
-    return { id: x.id, prospect: x.label || "Sans nom", website: x.website || "", espace: x.espace || "—", vues: visits.length, temps: visits.reduce((s, vv) => s + (vv.duration || 0), 0), derniere: last ? last.ts : null, creation: x.created_at, state: x.state || null };
+    return { id: x.id, prospect: x.label || "Sans nom", website: x.website || "", espace: x.espace || "—", vues: visits.length, temps: visits.reduce((s, vv) => s + (vv.duration || 0), 0), derniere: last ? last.ts : null, creation: x.created_at, state: x.state || null, createdBy: x.created_by || null };
   });
 }
 

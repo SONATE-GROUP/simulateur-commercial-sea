@@ -848,22 +848,18 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       // Le rapport peut être plus haut qu'une page (courbe d'apprentissage,
       // répartition par contact, effet halo...) : on cale sur la largeur de
       // page puis on découpe sur plusieurs pages plutôt que de tout écraser
-      // sur une seule, ce qui rendait le texte illisible.
-      const pxPerMm = canvas.width / pdfW;
-      const pageHeightPx = Math.max(1, Math.floor(pdfH * pxPerMm));
-      const pageCanvas = document.createElement("canvas");
-      pageCanvas.width = canvas.width;
-      const ctx = pageCanvas.getContext("2d");
-      let renderedPx = 0;
+      // sur une seule, ce qui rendait le texte illisible. Une seule image
+      // décalée verticalement (y négatif) à chaque page plutôt qu'un
+      // découpage manuel du canvas : jsPDF rogne automatiquement ce qui
+      // dépasse de la page, donc chaque addImage ne montre que sa tranche.
+      const img = canvas.toDataURL("image/png");
+      const imgH = (canvas.height * pdfW) / canvas.width;
+      let y = 0;
       let firstPage = true;
-      while (renderedPx < canvas.height) {
-        const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
-        pageCanvas.height = sliceHeightPx;
-        ctx.clearRect(0, 0, pageCanvas.width, sliceHeightPx);
-        ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+      while (y < imgH) {
         if (!firstPage) pdf.addPage();
-        pdf.addImage(pageCanvas.toDataURL("image/png"), "PNG", 0, 0, pdfW, sliceHeightPx / pxPerMm);
-        renderedPx += sliceHeightPx;
+        pdf.addImage(img, "PNG", 0, -y, pdfW, imgH);
+        y += pdfH;
         firstPage = false;
       }
       pdf.save(`${exportFileName}.pdf`);
