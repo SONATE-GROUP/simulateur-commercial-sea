@@ -179,13 +179,15 @@ function Slider({ label, value, min, max, step, onChange, accent, display, label
 function Fold({ title, defaultOpen = true, children }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ background: "rgba(255,255,255,0.65)", border: "1px solid #ddd5c8", borderRadius: 10, padding: 16, marginBottom: 14 }}>
       <button onClick={() => setOpen(v => !v)} style={{
         display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
         background: "none", border: "none", padding: 0, cursor: "pointer",
         marginBottom: open ? 10 : 0, fontFamily: "inherit",
       }}>
-        <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.16em", color: "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>{title}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, letterSpacing: "0.09em", color: "#1e3328", textTransform: "uppercase" }}>
+          <span style={{ color: "#e8571a", fontSize: 10 }}>◆</span>{title}
+        </span>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
           style={{ color: "rgba(0,0,0,0.35)", transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s", flexShrink: 0 }}>
           <polyline points="6 9 12 15 18 9" />
@@ -1001,8 +1003,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         {/* ── LEFT PANEL (cream) ── */}
         <div className="scroll-light" style={{ width: 380, minWidth: 380, overflowY: "auto", borderRight: `1px solid ${L_BORD}`, padding: "16px 16px 28px", background: CREAM }}>
               {/* Canal */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)" }}>Canal d'acquisition</div>
+              <div style={{ background: "rgba(255,255,255,0.65)", border: "1px solid #ddd5c8", borderRadius: 10, padding: 16, marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, letterSpacing: "0.09em", color: "#1e3328", textTransform: "uppercase", marginBottom: 10 }}>
+                  <span style={{ color: "#e8571a", fontSize: 10 }}>◆</span>Canal d'acquisition
+                </div>
                 <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
                   {Object.entries(CFG.channels).map(([k, c]) => (
                     <button key={k} onClick={() => setChannel(k)} style={{
