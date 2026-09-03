@@ -848,22 +848,18 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       // Le rapport peut être plus haut qu'une page (courbe d'apprentissage,
       // répartition par contact, effet halo...) : on cale sur la largeur de
       // page puis on découpe sur plusieurs pages plutôt que de tout écraser
-      // sur une seule, ce qui rendait le texte illisible.
-      const pxPerMm = canvas.width / pdfW;
-      const pageHeightPx = Math.max(1, Math.floor(pdfH * pxPerMm));
-      const pageCanvas = document.createElement("canvas");
-      pageCanvas.width = canvas.width;
-      const ctx = pageCanvas.getContext("2d");
-      let renderedPx = 0;
+      // sur une seule, ce qui rendait le texte illisible. Une seule image
+      // décalée verticalement (y négatif) à chaque page plutôt qu'un
+      // découpage manuel du canvas : jsPDF rogne automatiquement ce qui
+      // dépasse de la page, donc chaque addImage ne montre que sa tranche.
+      const img = canvas.toDataURL("image/png");
+      const imgH = (canvas.height * pdfW) / canvas.width;
+      let y = 0;
       let firstPage = true;
-      while (renderedPx < canvas.height) {
-        const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
-        pageCanvas.height = sliceHeightPx;
-        ctx.clearRect(0, 0, pageCanvas.width, sliceHeightPx);
-        ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
+      while (y < imgH) {
         if (!firstPage) pdf.addPage();
-        pdf.addImage(pageCanvas.toDataURL("image/png"), "PNG", 0, 0, pdfW, sliceHeightPx / pxPerMm);
-        renderedPx += sliceHeightPx;
+        pdf.addImage(img, "PNG", 0, -y, pdfW, imgH);
+        y += pdfH;
         firstPage = false;
       }
       pdf.save(`${exportFileName}.pdf`);
@@ -1094,7 +1090,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                           </span>
                         </div>
                         <input type="range" min={0} max={100} step={1} value={Math.round(contactSplit[k] ?? 0)}
-                          onChange={e => updateContactSplit(k, Number(e.target.value))}
+                          onChange={e => updateContactSplit(k, Number(e.target.value))} className="slider-light"
                           style={{ width: "100%", accentColor: accent }} />
                       </div>
                     ))}
@@ -1117,8 +1113,8 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   ))}
                 </div>
                 {geoScope === "localisee" && (
-                  <select value={geoZone} onChange={e => setGeoZone(e.target.value)}
-                    style={{ marginTop: 8, background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "8px 10px", color: "#0F332B", fontSize: 12, width: "100%", boxSizing: "border-box", outline: "none", cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
+                  <select value={geoZone} onChange={e => setGeoZone(e.target.value)} className="select-arrow"
+                    style={{ marginTop: 8, backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "8px 10px", color: "#0F332B", fontSize: 12, width: "100%", boxSizing: "border-box", outline: "none", cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
                     <option value="" disabled>Choisir une région</option>
                     {Object.entries(FRENCH_REGIONS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                   </select>
@@ -1153,7 +1149,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     <input type="number" value={budget} onChange={e => setBudget(Math.min(50000, Math.max(1, Number(e.target.value))))}
                       style={{ background: "transparent", border: "none", outline: "none", fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: 34, color: "#0F332B", letterSpacing: "-0.03em", width: "100%" }} />
                     <input type="range" min={100} max={50000} step={100} value={budget}
-                      onChange={e => setBudget(Number(e.target.value))}
+                      onChange={e => setBudget(Number(e.target.value))} className="slider-light"
                       style={{ width: "100%", marginTop: 10, accentColor: accent }} />
                   </>
                 ) : (
@@ -1162,7 +1158,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     <input type="number" value={tLeads} onChange={e => setTLeads(Math.min(500, Math.max(1, Number(e.target.value))))}
                       style={{ background: "transparent", border: "none", outline: "none", fontFamily: "'Manrope',sans-serif", fontWeight: 800, fontSize: 34, color: "#0F332B", letterSpacing: "-0.03em", width: "100%" }} />
                     <input type="range" min={1} max={500} step={1} value={tLeads}
-                      onChange={e => setTLeads(Number(e.target.value))}
+                      onChange={e => setTLeads(Number(e.target.value))} className="slider-light"
                       style={{ width: "100%", marginTop: 10, accentColor: accent }} />
                   </>
                 )}
@@ -1290,7 +1286,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                         <span style={{ fontSize: 11, fontWeight: 600, color: accent }}>{panierMoyen.toLocaleString("fr-FR")} €</span>
                       </div>
                       <input type="range" min={1} max={10000} step={1} value={panierMoyen}
-                        onChange={e => setPanierMoyen(Number(e.target.value))}
+                        onChange={e => setPanierMoyen(Number(e.target.value))} className="slider-light"
                         style={{ width: "100%", accentColor: accent }} />
                       <input type="number" value={panierMoyen} min={1}
                         onChange={e => setPanierMoyen(Math.max(1, Number(e.target.value)))}
@@ -1303,7 +1299,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                         <span style={{ fontSize: 11, fontWeight: 600, color: accent }}>{mrr.toLocaleString("fr-FR")} €</span>
                       </div>
                       <input type="range" min={1} max={2000} step={1} value={mrr}
-                        onChange={e => setMrr(Number(e.target.value))}
+                        onChange={e => setMrr(Number(e.target.value))} className="slider-light"
                         style={{ width: "100%", accentColor: accent }} />
                       <input type="number" value={mrr} min={1}
                         onChange={e => setMrr(Math.max(1, Number(e.target.value)))}
@@ -1422,8 +1418,8 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
                     {/* Mois de démarrage */}
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 6 }}>Mois de démarrage de la campagne</div>
-                    <select value={startMonth} onChange={e => setStartMonth(Number(e.target.value))}
-                      style={{ width: "100%", background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" }}>
+                    <select value={startMonth} onChange={e => setStartMonth(Number(e.target.value))} className="select-arrow"
+                      style={{ width: "100%", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" }}>
                       {MONTH_NAMES.map((m, i) => <option key={i} value={i}>{m}</option>)}
                     </select>
                     {firstHighSeasonIdx != null && (
