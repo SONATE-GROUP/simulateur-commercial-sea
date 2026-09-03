@@ -30,6 +30,7 @@ function ready() {
         "CREATE TABLE IF NOT EXISTS invites (token TEXT PRIMARY KEY, email TEXT, espace TEXT, role TEXT, sent_at TEXT, expires_at TEXT, activated_at TEXT)",
         "CREATE TABLE IF NOT EXISTS spaces (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, role TEXT, members TEXT)",
         "CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, label TEXT, website TEXT, espace TEXT, state TEXT, created_at TEXT, visits TEXT)",
+        "CREATE TABLE IF NOT EXISTS resets (token TEXT PRIMARY KEY, email TEXT, sent_at TEXT, expires_at TEXT, used_at TEXT)",
       ], "write");
       // Migrations additives : colonnes de suivi des connexions. SQLite n'a pas
       // de "ADD COLUMN IF NOT EXISTS" → on ignore l'erreur si déjà présente.
@@ -52,6 +53,7 @@ export async function createUser(u) {
     [u.email, u.name, u.role, u.espace || "", u.passwordHash, u.createdAt]);
 }
 export async function updateUserRole(email, role) { await ex("UPDATE users SET role=? WHERE email=?", [role, email]); }
+export async function updateUserPassword(email, passwordHash) { await ex("UPDATE users SET password_hash=? WHERE email=?", [passwordHash, email]); }
 export async function removeUser(email) { await ex("DELETE FROM users WHERE email=?", [email]); }
 // Enregistre une connexion réussie : incrémente le compteur, met à jour la
 // dernière connexion et fixe la première si elle n'existe pas encore.
@@ -89,6 +91,17 @@ export async function listInvites() {
     return { token: x.token, email: x.email, espace: x.espace || "", role: x.role || "Lecteur", sentAt: x.sent_at, expiresAt: x.expires_at, activatedAt: x.activated_at || null, status: x.activated_at ? "activated" : expired ? "expired" : "pending" };
   });
 }
+
+// ── Réinitialisation de mot de passe ──
+export async function getReset(token) {
+  const r = await ex("SELECT * FROM resets WHERE token=?", [token]); const x = r.rows[0];
+  return x ? { token: x.token, email: x.email, sentAt: x.sent_at, expiresAt: x.expires_at, usedAt: x.used_at || null } : null;
+}
+export async function upsertReset(token, r) {
+  await ex("INSERT INTO resets(token,email,sent_at,expires_at,used_at) VALUES(?,?,?,?,?)",
+    [token, r.email, r.sentAt, r.expiresAt, r.usedAt || null]);
+}
+export async function setResetUsed(token, ts) { await ex("UPDATE resets SET used_at=? WHERE token=?", [ts, token]); }
 
 // ── Spaces ──
 function spaceOut(x) { let m = []; try { m = JSON.parse(x.members || "[]"); } catch { /* */ } return { id: x.id, name: x.name, createdAt: x.created_at, role: x.role || "Propriétaire", members: m }; }

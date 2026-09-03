@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import Simulator from "../marketing-simulator.jsx";
 import BackOffice from "./BackOffice.jsx";
 import InviteAccept from "./InviteAccept.jsx";
+import ResetPassword from "./ResetPassword.jsx";
 import Login from "./Login.jsx";
 
 // Routage minimal par chemin (API History, sans dépendance) : /back-office ↔ /.
@@ -14,8 +15,9 @@ export default function App() {
 
   const params = new URLSearchParams(window.location.search);
   const inviteToken = params.get("invite");
+  const resetToken = params.get("reset");
   const isShared = params.has("s"); // lien partagé → consultation publique (prospect)
-  const needsAuth = !inviteToken && !isShared;
+  const needsAuth = !inviteToken && !resetToken && !isShared;
 
   useEffect(() => {
     if (!needsAuth) return;
@@ -78,6 +80,9 @@ export default function App() {
 
   // 1) Activation d'une invitation (destinataire sans compte).
   if (inviteToken) return <InviteAccept token={inviteToken} />;
+
+  // 1bis) Réinitialisation de mot de passe (lien reçu par email).
+  if (resetToken) return <ResetPassword token={resetToken} />;
 
   // 2) Lien partagé → consultation publique, sans connexion.
   if (isShared) return <Simulator consultation />;
