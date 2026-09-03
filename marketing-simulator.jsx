@@ -386,6 +386,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [logo, setLogo]       = useState(null);
   const [website, setWebsite] = useState("");
   const [shareUrl, setShareUrl] = useState("");
+  // Identifiant du rapport déjà enregistré dans cette session : ré-enregistrer
+  // (double-clic, ajustements puis nouvel enregistrement) met à jour le même
+  // rapport au lieu d'en créer un nouveau à chaque fois.
+  const [currentLinkId, setCurrentLinkId] = useState(null);
   const [copied, setCopied]   = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
   const [exporting, setExporting]   = useState(false);
@@ -416,12 +420,37 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       return next;
     });
   };
+  // Rapports enregistrés depuis CE navigateur (suivi local), quel que soit leur
+  // espace : couvre l'instant qui suit un enregistrement, avant même que le
+  // serveur ait pu répondre, et les rapports jamais rangés dans un espace.
+  const localReports = () => {
+    const store = loadTracking();
+    return Object.entries(store).map(([id, e]) => {
+      const visits = e.visits || [];
+      const last = visits.length ? visits.reduce((a, b) => (new Date(b.ts) > new Date(a.ts) ? b : a)) : null;
+      return {
+        id, prospect: e.label || "Sans nom", website: e.website || "", espace: e.espace || "—",
+        vues: visits.length, temps: visits.reduce((s, v) => s + (v.duration || 0), 0),
+        derniere: last ? last.ts : null, creation: e.createdAt, state: e.state || null,
+      };
+    });
+  };
   const openMyReports = () => {
-    setMyReportsOpen(true); setMyReports(null);
+    setMyReportsOpen(true);
+    const local = localReports();
+    setMyReports(local.length ? local.sort((a, b) => new Date(b.creation) - new Date(a.creation)) : null);
     fetch("/api/my-reports", { headers: { "X-Requested-With": "fetch" } })
       .then(r => (r.ok ? r.json() : { reports: [] }))
-      .then(d => setMyReports(d.reports || []))
-      .catch(() => setMyReports([]));
+      .then(d => {
+        // Le serveur prime pour les rapports qu'il connaît (stats à jour,
+        // visites d'autres personnes, espace réellement assigné) ; les
+        // rapports enregistrés localement mais pas encore en espace restent
+        // affichés grâce au suivi local.
+        const byId = new Map(local.map(r => [r.id, r]));
+        (d.reports || []).forEach(r => byId.set(r.id, r));
+        setMyReports([...byId.values()].sort((a, b) => new Date(b.creation) - new Date(a.creation)));
+      })
+      .catch(() => { if (!local.length) setMyReports([]); });
   };
 
   const contentRef   = useRef();
@@ -846,23 +875,30 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
     const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, haloEnabled, haloRate, prospect, website }));
-    const linkId = genLinkId();
+    // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
+    // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
+    const linkId = currentLinkId ?? genLinkId();
+    if (!currentLinkId) setCurrentLinkId(linkId);
     const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
-    // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques.
+    // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques
+    // ; préserve les visites déjà enregistrées et l'espace déjà assigné.
     const store = loadTracking();
-    if (!store[linkId]) store[linkId] = {
+    const existing = store[linkId];
+    store[linkId] = {
       label: prospect || "Sans nom",
       website: website || "",
-      espace: "—",
-      createdAt: new Date().toISOString(),
+      espace: existing?.espace || "—",
+      createdAt: existing?.createdAt || new Date().toISOString(),
       state: encoded,
-      visits: [],
+      visits: existing?.visits || [],
     };
     saveTracking(store);
     // Enregistre aussi le rapport côté serveur (back-office multi-poste).
+    // espace omis (pas ecrase) : un re-enregistrement ne doit pas annuler un
+    // rangement dans un espace deja fait depuis le back-office.
     fetch("/api/report", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ linkId, label: prospect || "Sans nom", website: website || "", espace: "—", state: encoded }),
+      body: JSON.stringify({ linkId, label: prospect || "Sans nom", website: website || "", state: encoded }),
     }).catch(() => {});
     setShareUrl(url);
     try { await navigator.clipboard.writeText(url); } catch (_) {}
@@ -1716,7 +1752,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, padding: "20px 0", textAlign: "center" }}>Chargement…</div>
               ) : myReports.length === 0 ? (
                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, padding: "20px 0", textAlign: "center" }}>
-                  Aucun rapport dans vos espaces pour l'instant.
+                  Aucun rapport enregistré pour l'instant.
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
