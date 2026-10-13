@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit } from "./src/config/defaults";
+import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit, getDefaultsSource } from "./src/config/defaults";
+import { parseGoogleAdsExport, aggregateCampaigns, decodeExport } from "./src/googleAdsImport";
 import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
 
 const CFG = {
@@ -20,6 +21,7 @@ const CFG = {
       cpmDigits: 1,
       cpmDefault: 30,
       showCtr: true,
+      searchBased: true, // enchères au clic sur requête : le CPM n'est pas un repère
     },
     "meta-ads": {
       label: "Meta Ads",
@@ -321,6 +323,19 @@ const LEARNING_STEPS = [
 // optimiser : ~30 conv/mois (recommandation Google Smart Bidding ; Meta ~50/sem).
 const MIN_SIGNAL_CONV = 30;
 
+// Rendements décroissants : au-delà du budget de référence (celui auquel le
+// CPC/CPL saisi est réaliste), les dernières enchères captent des requêtes moins
+// qualifiées et plus disputées, donc le coût unitaire monte. Hypothèse prudente :
+// +15 % de coût unitaire à chaque multiplication du budget par e (~2,7), plafonné
+// à ×2,5. À recaler avec des comptes réels.
+const DIMINISHING_K = 0.15;
+const DIMINISHING_MAX = 2.5;
+const costPressure = (spend, ref) =>
+  ref > 0 && spend > ref ? Math.min(DIMINISHING_MAX, 1 + DIMINISHING_K * Math.log(spend / ref)) : 1;
+// Garde-fou : cumulées, la montée en charge et la saisonnalité ne peuvent pas
+// diviser le CPL de départ par plus de 2.
+const MIN_CPL_FACTOR = 0.5;
+
 // ─── Saisonnalité (logique portée du simulateur SEO) ─────────
 // Les mois cochés en "haute saison" voient leurs résultats pondérés par un
 // coefficient ; les autres restent à ×1. `startMonth` décale le calendrier.
@@ -365,6 +380,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [haloEnabled, setHaloEnabled] = useState(false);
   const [haloRate, setHaloRate]       = useState(0.25);
   const [closing, setClosing]         = useState(20);
+  // Étape facultative entre leads et clients : part des leads réellement
+  // qualifiés (hors spam, hors hors-cible). Désactivée : tous les leads comptent.
+  const [qualifEnabled, setQualifEnabled] = useState(false);
+  const [qualifRate, setQualifRate]       = useState(70);
   const [cycleVente, setCycleVente]   = useState(1);
   const [seasonalityEnabled, setSeasonalityEnabled] = useState(false);
   const [startMonth, setStartMonth]   = useState(0);
@@ -375,6 +394,29 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   //  - budgetMultiplier : ce que VOUS choisissez d'investir en plus (ou pas)
   //    pour capter cette demande. À 1, vous n'augmentez pas votre budget.
   const [marketMultiplier, setMarketMultiplier] = useState(3);
+  // "demand" : la haute saison = plus de demande, CPL plus bas (logique historique).
+  // "cost"   : la haute saison = concurrence/coûts plus élevés, CPL plus haut
+  //            (ex. rénovation énergétique : l'hiver est le mois le plus cher).
+  const [seasonEffect, setSeasonEffect] = useState("demand");
+  // Compte existant : les CPC/CTR/conversion saisis viennent d'un compte déjà
+  // optimisé, la courbe d'apprentissage ne doit pas être appliquée une 2e fois.
+  const [accountType, setAccountType] = useState("new"); // "new" | "existing"
+  const [diminishing, setDiminishing] = useState(true);
+  // Volume de recherche mensuel de la zone (Planificateur de mots clés), janvier
+  // à décembre. 0 = non renseigné. Sert de plafond d'impressions en Search.
+  const [searchVolumes, setSearchVolumes] = useState(Array(12).fill(0));
+  const [impressionShare, setImpressionShare] = useState(80); // part des recherches réellement atteignable (%)
+  const [lostBudgetShare, setLostBudgetShare] = useState(null); // % d'impressions perdues faute de budget (optionnel)
+  const [volumePasteError, setVolumePasteError] = useState(false);
+  // Import d'un export de campagnes Google Ads : aperçu avant application.
+  const [gaImport, setGaImport] = useState(null); // { fileName, campaigns, selected, months, monthsDetected, hasConv }
+  const [gaError, setGaError]   = useState("");
+  const [gaApplied, setGaApplied] = useState("");
+  // Synthèse multi-canaux : instantanés de simulations (un par canal ou zone) que
+  // l'on agglomère. On simule un canal à la fois, puis on l'ajoute à la synthèse.
+  const [mixItems, setMixItems] = useState([]);
+  const [mixTargetLeads, setMixTargetLeads] = useState(0); // objectif de leads / mois, 0 = aucun
+  const [refBudgetOverride, setRefBudgetOverride] = useState(null); // null = automatique
   const [budgetMultiplier, setBudgetMultiplier] = useState(1);
   const [prospect, setProspect] = useState("");
   const [logo, setLogo]       = useState(null);
@@ -396,6 +438,71 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const ch     = CFG.channels[channel];
   const biz    = BUSINESS_TYPES[businessType];
   const accent = ch.color;
+  // Colle 12 valeurs mensuelles (Planificateur de mots clés, tableur) : accepte
+  // retours à la ligne, tabulations, points-virgules ou espaces, et les milliers
+  // espacés ("1 500") quand les valeurs sont une par ligne.
+  const pasteVolumes = (text) => {
+    let tokens = text.trim().split(/[\n\t;]+/).filter(t => t.trim() !== "");
+    if (tokens.length < 12) tokens = text.trim().split(/[\s;]+/).filter(Boolean);
+    const nums = tokens.map(t => Number(t.replace(/[\s\u00a0]/g, "").replace(",", ".")));
+    if (nums.length < 12 || nums.slice(0, 12).some(n => !Number.isFinite(n) || n < 0)) {
+      setVolumePasteError(true);
+      return;
+    }
+    setVolumePasteError(false);
+    setSearchVolumes(nums.slice(0, 12).map(Math.round));
+  };
+  const onGaFile = async (file) => {
+    setGaError(""); setGaApplied("");
+    if (!file) return;
+    try {
+      const parsed = parseGoogleAdsExport(decodeExport(await file.arrayBuffer()));
+      if (parsed.error) { setGaImport(null); setGaError(parsed.error); return; }
+      setGaImport({
+        fileName: file.name, campaigns: parsed.campaigns, selected: parsed.campaigns.map(() => true),
+        months: parsed.months ?? 1, monthsDetected: parsed.months != null, hasConv: parsed.hasConv,
+      });
+    } catch (_) {
+      setGaImport(null); setGaError("Impossible de lire ce fichier.");
+    }
+  };
+  const gaAgg = gaImport
+    ? aggregateCampaigns(gaImport.campaigns.filter((_, i) => gaImport.selected[i]), gaImport.months)
+    : null;
+  const applyGaImport = () => {
+    if (!gaAgg || gaAgg.clicks <= 0) return;
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const monthly = Math.round(gaAgg.monthlyBudget);
+    setMode("budget");
+    setBilling("cpc");
+    setBudget(clamp(monthly, 100, 50000));
+    setCpc(clamp(r2(gaAgg.cpc), 0.1, ch.cpcMax ?? 20));
+    if (gaAgg.ctr != null) setCtr(clamp(r2(gaAgg.ctr), 0.1, ch.ctrMax ?? 15));
+    if (gaAgg.convRate != null) setConv(clamp(r2(gaAgg.convRate), 0.1, 20));
+    if (gaAgg.cpl != null) setCplTarget(clamp(Math.round(gaAgg.cpl), 1, 1000));
+    if (gaAgg.lostBudget != null) setLostBudgetShare(Math.round(gaAgg.lostBudget));
+    // Chiffres d'un compte qui tourne : pas de montée en charge, et le CPC observé
+    // vaut pour le budget réellement dépensé.
+    setAccountType("existing");
+    setRefBudgetOverride(clamp(monthly, 100, 30000));
+    setGaApplied(`${gaImport.fileName} : ${gaImport.selected.filter(Boolean).length} campagne(s), ${Math.round(gaAgg.monthlyBudget).toLocaleString("fr-FR")} €/mois.`);
+    setGaImport(null);
+  };
+  const addToMix = () => {
+    const where = geoScope === "localisee" && geoZone ? ` · ${FRENCH_REGIONS[geoZone]}` : "";
+    setMixItems(prev => [...prev.slice(0, 7), {
+      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      name: `${ch.label}${where}`, channel, stage: biz.conversionStage,
+      spend: annualSpend, leads: annualLeads, clients: biz.hasClosing ? annualClients : annualLeads,
+      ca: annualCA, profit: annualCA * effectiveMarge / 100 - annualSpend,
+    }]);
+  };
+  const segBtnStyle = (active) => ({
+    flex: 1, padding: "6px 6px", borderRadius: 6, fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer",
+    ...(active ? { background: accent, border: `1px solid ${accent}`, color: "#fff" }
+               : { background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", color: "rgba(0,0,0,0.5)" }),
+  });
   // Lecteur = lecture seule : pas d'enregistrement. Consultation (prospect) non plus.
   const canSave = !consultation && user?.role !== "Lecteur";
   // Ajuste manuellement la part d'un type de contact : les autres types
@@ -528,12 +635,31 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (typeof d.haloEnabled === "boolean") setHaloEnabled(d.haloEnabled);
         if (d.haloRate >= 0) setHaloRate(d.haloRate);
         if (d.closing > 0)     setClosing(d.closing);
+        if (typeof d.qualifEnabled === "boolean") setQualifEnabled(d.qualifEnabled);
+        if (d.qualifRate >= 1 && d.qualifRate <= 100) setQualifRate(d.qualifRate);
         if (d.cycleVente >= 1 && d.cycleVente <= 12) setCycleVente(d.cycleVente);
         if (typeof d.seasonalityEnabled === "boolean") setSeasonalityEnabled(d.seasonalityEnabled);
         if (d.startMonth >= 0 && d.startMonth <= 11) setStartMonth(d.startMonth);
         if (Array.isArray(d.highSeasonMonths) && d.highSeasonMonths.length === 12)
           setHighSeasonMonths(d.highSeasonMonths.map(Boolean));
         if (d.marketMultiplier >= 1) setMarketMultiplier(d.marketMultiplier);
+        if (d.seasonEffect === "demand" || d.seasonEffect === "cost") setSeasonEffect(d.seasonEffect);
+        if (d.accountType === "new" || d.accountType === "existing") setAccountType(d.accountType);
+        if (typeof d.diminishing === "boolean") setDiminishing(d.diminishing);
+        if (Array.isArray(d.searchVolumes) && d.searchVolumes.length === 12)
+          setSearchVolumes(d.searchVolumes.map(v => (Number(v) > 0 ? Number(v) : 0)));
+        if (Array.isArray(d.mixItems)) {
+          const num = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+          setMixItems(d.mixItems.slice(0, 8).filter(m => m && typeof m.name === "string").map((m, i) => ({
+            id: String(m.id ?? i), name: m.name.slice(0, 60), channel: CFG.channels[m.channel] ? m.channel : "google-ads",
+            stage: typeof m.stage === "string" ? m.stage.slice(0, 20) : "Leads",
+            spend: num(m.spend), leads: num(m.leads), clients: num(m.clients), ca: num(m.ca), profit: num(m.profit),
+          })));
+        }
+        if (d.mixTargetLeads >= 0) setMixTargetLeads(Number(d.mixTargetLeads));
+        if (d.impressionShare >= 10 && d.impressionShare <= 100) setImpressionShare(d.impressionShare);
+        if (d.lostBudgetShare >= 0 && d.lostBudgetShare <= 100) setLostBudgetShare(d.lostBudgetShare);
+        if (d.refBudgetOverride > 0) setRefBudgetOverride(d.refBudgetOverride);
         if (d.budgetMultiplier >= 1) setBudgetMultiplier(d.budgetMultiplier);
         else if (d.highSeasonMultiplier >= 1) setMarketMultiplier(d.highSeasonMultiplier); // lien genere avant la separation marche/budget
         if (d.prospect)    setProspect(d.prospect);
@@ -594,23 +720,47 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   let impr = 0, clicks = 0, leads = 0, cpl = 0, budgetOut = 0;
   const safeDiv = (a, b) => b > 0 ? a / b : 0;
 
+  // Budget de référence des rendements décroissants : budget national indicatif
+  // du couple canal x secteur, ramené au poids de la région en zone localisée
+  // (plancher 10 %). Modifiable : c'est le budget auquel le CPC/CPL saisi tient.
+  const nationalRefBudget = getDefaultValues(channel, sector)?.budget ?? 0;
+  const regionShare = geoZone ? getRegionPopulationShare(geoZone) : 0;
+  const autoRefBudget = nationalRefBudget * (geoScope === "localisee" && geoZone ? Math.max(regionShare, 0.1) : 1);
+  const refBudget = refBudgetOverride ?? autoRefBudget;
+  const pressureOf = s => (diminishing ? costPressure(s, refBudget) : 1);
+  // Dépense réelle pour un coût "de base" donné : le coût unitaire dépend du
+  // budget, qui dépend lui-même du coût unitaire. Point fixe en quelques tours.
+  const spendWithPressure = raw => {
+    let x = raw;
+    for (let i = 0; i < 6; i++) x = raw * pressureOf(x);
+    return x;
+  };
+
+  // Plafond d'impressions par mois civil (Search uniquement) : volume de recherche
+  // x part d'impressions atteignable. null = pas de plafond (volume non renseigné).
+  const volumeActive = !!ch.searchBased && searchVolumes.some(v => v > 0);
+  const impressionCap = calMonth => (volumeActive && searchVolumes[calMonth] > 0 ? searchVolumes[calMonth] * impressionShare / 100 : null);
+
   const isCpm = billing === "cpm";
   const isCplBilling = billing === "cpl";
+  // Facteur de coût appliqué au niveau de budget simulé (1 = pas de pression).
+  let pressure = 1;
   if (mode === "budget") {
+    pressure = pressureOf(budget);
     if (isCplBilling) {
       // CPL direct : le budget achète des leads à un coût unitaire connu ou
       // constaté (chez un confrère, ou par expérience). Clics et impressions
       // sont reconstruits pour l'entonnoir via le CTR et le taux de conversion.
-      leads = Math.round(safeDiv(budget, cplTarget));
+      leads = Math.round(safeDiv(budget, cplTarget * pressure));
       clicks = Math.round(safeDiv(leads, conv / 100));
       impr = Math.round(safeDiv(clicks, ctr / 100));
     } else if (isCpm) {
       // CPM : le budget achète des impressions, les clics en découlent via le CTR.
-      impr = Math.round(safeDiv(budget, cpm) * 1000);
+      impr = Math.round(safeDiv(budget, cpm * pressure) * 1000);
       clicks = Math.round(impr * ctr / 100);
       leads = Math.round(clicks * conv / 100);
     } else {
-      clicks = Math.round(safeDiv(budget, cpc));
+      clicks = Math.round(safeDiv(budget, cpc * pressure));
       impr = Math.round(safeDiv(clicks, ctr / 100));
       leads = Math.round(clicks * conv / 100);
     }
@@ -619,13 +769,18 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     leads = tLeads;
     clicks = Math.round(safeDiv(leads, conv / 100));
     impr = Math.round(safeDiv(clicks, ctr / 100));
-    budgetOut = isCplBilling ? Math.round(leads * cplTarget)
-      : isCpm ? Math.round(safeDiv(impr, 1000) * cpm)
-      : Math.round(clicks * cpc);
+    const rawBudget = isCplBilling ? leads * cplTarget
+      : isCpm ? safeDiv(impr, 1000) * cpm
+      : clicks * cpc;
+    budgetOut = Math.round(spendWithPressure(rawBudget));
+    pressure = rawBudget > 0 ? budgetOut / rawBudget : 1;
   }
   cpl = leads > 0 ? safeDiv(mode === "budget" ? budget : budgetOut, leads) : 0;
   // En e-commerce la conversion EST une vente : pas d'étape de closing distincte.
-  const clients     = biz.hasClosing ? Math.round(leads * closing / 100) : leads;
+  // Avec l'étape "leads qualifiés", le closing s'applique aux seuls leads qualifiés.
+  const qualFactor  = qualifEnabled && biz.hasClosing ? qualifRate / 100 : 1;
+  const qualifiedLeads = leads * qualFactor;
+  const clients     = biz.hasClosing ? Math.round(leads * qualFactor * closing / 100) : leads;
   // Valeur d'un client : panier unique (revenu ponctuel) ou valeur vie client
   //  (LTV = revenu mensuel × durée de vie) pour un revenu récurrent / abonnement.
   const recurring   = revenueType === "recurrent";
@@ -645,25 +800,13 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // Seuil de rentabilité : ROAS minimal pour que la marge couvre la dépense.
   const breakEvenRoas = effectiveMarge > 0 ? 100 / effectiveMarge : Infinity;
 
-  // ROI à maturité : le ROI net ci-dessus reflète le CPL du mois 1 (réglages
-  // actuels) ; celui-ci projette le même budget/objectif une fois le CPL
-  // stabilisé au palier d'apprentissage (LEARNING_STEPS[3] = mois 4), pour voir
-  // d'un coup d'œil l'écart entre "aujourd'hui" et "une fois l'algorithme optimisé".
-  const matureLm      = LEARNING_STEPS[3].mult;
-  const matureLeads   = mode === "budget" ? leads / matureLm : leads;
-  const matureSpend   = mode === "budget" ? spend : spend * matureLm;
-  const matureClients = biz.hasClosing ? matureLeads * closing / 100 : matureLeads;
-  const matureCA      = matureClients * clientValue;
-  const matureProfit  = matureCA * effectiveMarge / 100 - matureSpend;
-  const matureRoiPct  = matureSpend > 0 ? (matureProfit / matureSpend) * 100 : 0;
-
   // Effet halo (branding) : parmi les clics qui n'ont pas converti tout de
   // suite, une part revient plus tard via une recherche de marque ou la fiche
   // Google (GMB), en dehors du tracking SEA direct. Estimation à part : ne
   // modifie ni leads/clients/CA, ni CPL/ROI/budget affichés ailleurs.
   const haloNonConverted = Math.max(0, clicks - leads);
   const haloLeads   = haloEnabled ? Math.round(haloNonConverted * haloRate / 100) : 0;
-  const haloClients = biz.hasClosing ? Math.round(haloLeads * closing / 100) : haloLeads;
+  const haloClients = biz.hasClosing ? Math.round(haloLeads * qualFactor * closing / 100) : haloLeads;
   const haloCA      = haloClients * clientValue;
 
   // Répartition des leads entre types de contact (formulaire, appel, RDV...),
@@ -682,6 +825,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
   // Le tableau détaillé dérive des mêmes paliers que le graphique (LEARNING_STEPS)
   // plutôt que de dupliquer les pourcentages, pour ne jamais désynchroniser les deux.
+  const isNewAccount = accountType === "new";
   const learningData = LEARNING_STEPS.map(s => ({ ...s, cpl: cpl * s.mult }));
   const learningTable = LEARNING_STEPS.map((s, i) => ({
     label: `Mois ${i + 1}`,
@@ -700,10 +844,13 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // être trop agressif sur les très petites régions (un minimum de budget
   // reste nécessaire pour faire tourner une campagne, quelle que soit la
   // taille du marché local). Marge de ×2,5 avant de déclencher l'alerte.
-  const nationalRefBudget = getDefaultValues(channel, sector)?.budget ?? 0;
-  const regionShare = geoZone ? getRegionPopulationShare(geoZone) : 0;
   const localBudgetCeiling = nationalRefBudget * Math.max(regionShare, 0.1) * 2.5;
-  const budgetHighForZone = geoScope === "localisee" && !!geoZone && nationalRefBudget > 0 && spend > localBudgetCeiling;
+  // L'alerte démographique est un repère grossier : quand le volume de recherche
+  // est renseigné, c'est lui qui juge la saturation ; et si le compte perd déjà
+  // une part notable d'impressions faute de budget, il n'est pas saturé.
+  const hasBudgetHeadroom = lostBudgetShare != null && lostBudgetShare >= 30;
+  const budgetHighForZone = geoScope === "localisee" && !!geoZone && nationalRefBudget > 0 && spend > localBudgetCeiling
+    && !volumeActive && !hasBudgetHeadroom;
 
   // Projection sur 12 mois combinant DEUX effets, mois par mois :
   //  • Apprentissage : le CPL/CPA baisse les premiers mois (LEARNING_STEPS),
@@ -725,7 +872,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // null si aucun mois de haute saison coché) : signale si la haute saison
   // arrive avant ou après la fin de la phase d'apprentissage (mois 4, cf.
   // LEARNING_STEPS), pour aider à caler le mois de démarrage en conséquence.
-  const firstHighSeasonIdx = seasonalityEnabled
+  const firstHighSeasonIdx = seasonalityEnabled && isNewAccount
     ? Array.from({ length: 12 }, (_, i) => i).find(i => highSeasonMonths[(startMonth + i) % 12]) ?? null
     : null;
   const highSeasonBeforeMaturity = firstHighSeasonIdx != null && firstHighSeasonIdx < 3;
@@ -734,17 +881,40 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     const high = seasonalityEnabled && highSeasonMonths[calMonth];
     const marketCoef = high ? marketMultiplier : 1;
     const budgetCoef = high ? budgetMultiplier : 1;
-    const lm = LEARNING_STEPS[i]?.mult ?? LEARNING_STEPS[LEARNING_STEPS.length - 1].mult; // mult CPL du mois
-    // budget figé → le volume profite du budget investi en plus (× budgetCoef),
-    //   de l'efficacité marché (× marketCoef) et de la baisse de CPL (÷ lm) ;
+    // Compte existant : le CPL saisi est déjà optimisé, pas de montée en charge.
+    const lm = isNewAccount
+      ? (LEARNING_STEPS[i]?.mult ?? LEARNING_STEPS[LEARNING_STEPS.length - 1].mult)
+      : 1;
+    // Effet saisonnier sur le CPL : plus de demande le baisse, plus de concurrence
+    // le monte. Cumulé à la montée en charge, plafonné par MIN_CPL_FACTOR.
+    const seasonCpl = seasonEffect === "cost" ? marketCoef : 1 / marketCoef;
+    const cplFactor = Math.max(MIN_CPL_FACTOR, lm * seasonCpl);
+    // budget figé → le volume suit le budget investi (× budgetCoef) et la baisse
+    //   (ou hausse) de CPL (÷ cplFactor), avec la pression de coût au budget du mois ;
     // objectif figé → la cible de leads suit le budget qu'on choisit d'y mettre
-    //   (× budgetCoef), le marché et l'apprentissage rendent le budget nécessaire
-    //   pour l'atteindre moins élevé (÷ marketCoef, × lm).
-    const mLeads   = mode === "budget" ? leads * budgetCoef * marketCoef / lm : leads * budgetCoef;
-    const mClients = biz.hasClosing ? mLeads * closing / 100 : mLeads;
+    //   (× budgetCoef), la dépense nécessaire suit le CPL (× cplFactor).
+    let mLeads, mSpend;
+    if (mode === "budget") {
+      const mBudget = spend * budgetCoef;
+      mLeads = leads * pressure * budgetCoef / (pressureOf(mBudget) * cplFactor);
+      mSpend = mBudget;
+    } else {
+      mLeads = leads * budgetCoef;
+      mSpend = spendWithPressure(spend / pressure * budgetCoef * cplFactor);
+    }
+    // Plafond de volume : on ne peut pas afficher plus d'impressions que les
+    // recherches disponibles. Au-delà, leads et dépense sont ramenés au plafond
+    // (le budget non dépensable reste inutilisé).
+    const mImprNeeded = safeDiv(mLeads, (conv / 100) * (ctr / 100));
+    const cap = impressionCap(calMonth);
+    const capFactor = cap != null && mImprNeeded > cap ? cap / mImprNeeded : 1;
+    const uncappedLeads = mLeads;
+    mLeads *= capFactor;
+    mSpend *= capFactor;
+    const mClients = biz.hasClosing ? mLeads * qualFactor * closing / 100 : mLeads;
     const mCA      = mClients * clientValue;
-    const mSpend   = mode === "budget" ? spend * budgetCoef : spend * budgetCoef * lm / marketCoef;
     return {
+      capped: capFactor < 1, cap, usage: cap != null ? mImprNeeded / cap : null, uncappedLeads, imprNeeded: mImprNeeded,
       label: seasonalityEnabled ? MONTH_NAMES[calMonth] : `M${i + 1}`,
       high, marketCoef, budgetCoef,
       leads: mLeads,
@@ -759,6 +929,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const annualSpend   = seasonalMonths.reduce((s, m) => s + m.spend, 0);
   const annualRoas    = annualSpend > 0 ? annualCA / annualSpend : 0;
   const annualRoiPct  = annualSpend > 0 ? (annualCA * effectiveMarge / 100 - annualSpend) / annualSpend * 100 : 0;
+  const cappedMonths = seasonalMonths.filter(m => m.capped);
+  const annualLeadsUncapped = seasonalMonths.reduce((s, m) => s + m.uncappedLeads, 0);
+  const peakUsage = Math.max(0, ...seasonalMonths.map(m => m.usage ?? 0));
+  // Part de l'objectif / du volume espéré réellement atteignable sur 12 mois.
+  const volumeCoverage = annualLeadsUncapped > 0 ? annualLeads / annualLeadsUncapped : 1;
   const maxMonthLeads = Math.max(...seasonalMonths.map(m => m.leads), 1);
 
   // Cycle de vente : un lead du mois i se conclut ~ (cycleVente − 1) mois plus
@@ -810,6 +985,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         backgroundColor: "#1a2e25",
         useCORS: true,
         logging: false,
+        ignoreElements: (node) => node.dataset?.exportHide === "1",
         onclone: (_, el) => { el.style.paddingBottom = "32px"; },
       })
     );
@@ -864,7 +1040,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, haloEnabled, haloRate, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, qualifEnabled, qualifRate, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, mixItems, mixTargetLeads, haloEnabled, haloRate, prospect, website }));
     // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
     // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
     const linkId = currentLinkId ?? genLinkId();
@@ -1171,7 +1347,84 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
               {/* Sliders */}
               <div style={{ background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 14 }}>Paramètres du canal</div>
+                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 8 }}>Paramètres du canal</div>
+                {(() => {
+                  const d = getDefaultValues(channel, sector);
+                  if (!d) return null;
+                  const untouched = cpc === d.cpc && ctr === d.ctr && conv === Math.round(d.conversionRate * getSupportFactor(support) * 10) / 10;
+                  const src = getDefaultsSource(channel, sector);
+                  return (
+                    <div style={{ fontSize: 10, lineHeight: 1.5, marginBottom: 14, padding: "7px 9px", borderRadius: 7,
+                      background: untouched && !src.calibrated ? "#a6402a10" : "rgba(0,0,0,0.04)", color: "rgba(0,0,0,0.5)" }}>
+                      {untouched ? (
+                        <>
+                          <strong style={{ color: src.calibrated ? "#2f7a46" : "#7a3520" }}>{src.label}.</strong>{" "}{src.detail}
+                        </>
+                      ) : (
+                        "Valeurs saisies à la main : elles remplacent les valeurs de départ du secteur."
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Import d'un export Google Ads : remplit CPC, CTR, conversion et budget */}
+                {channel === "google-ads" && (
+                  <div style={{ marginBottom: 14 }}>
+                    <label style={{ display: "block", textAlign: "center", padding: "8px 10px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600,
+                      border: `1px dashed ${accent}`, color: accent, background: accent + "0d" }}>
+                      Importer un export Google Ads (CSV)
+                      <input type="file" accept=".csv,.tsv,.txt" style={{ display: "none" }}
+                        onChange={e => { onGaFile(e.target.files?.[0]); e.target.value = ""; }} />
+                    </label>
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: 4 }}>
+                      Rapport « Campagnes » avec Impr., Clics, Coût et Conversions, sur la période de votre choix. Le fichier est lu dans votre navigateur et n'est pas envoyé.
+                    </div>
+                    {gaError && <div style={{ fontSize: 10.5, color: "#a6402a", marginTop: 6 }}>{gaError}</div>}
+                    {gaApplied && !gaImport && (
+                      <div style={{ fontSize: 10.5, color: "#2f7a46", marginTop: 6 }}>Import appliqué : {gaApplied} Compte réglé sur « existant ».</div>
+                    )}
+                    {gaImport && gaAgg && (
+                      <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: "rgba(255,255,255,0.7)", border: "1px solid rgba(0,0,0,0.12)" }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#0F332B", marginBottom: 6 }}>{gaImport.fileName}</div>
+                        <div style={{ maxHeight: 120, overflowY: "auto", marginBottom: 8 }}>
+                          {gaImport.campaigns.map((c, i) => (
+                            <label key={i} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10.5, color: "rgba(0,0,0,0.6)", padding: "2px 0" }}>
+                              <input type="checkbox" checked={gaImport.selected[i]}
+                                onChange={() => setGaImport(g => ({ ...g, selected: g.selected.map((v, j) => (j === i ? !v : v)) }))} />
+                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                              <span style={{ color: "rgba(0,0,0,0.4)" }}>{Math.round(c.cost).toLocaleString("fr-FR")} €</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 4 }}>
+                          Nombre de mois couverts{gaImport.monthsDetected ? " (détecté)" : " (non détecté, à vérifier)"}
+                        </div>
+                        <input type="number" min={0.1} step={0.5} value={gaImport.months}
+                          onChange={e => setGaImport(g => ({ ...g, months: Math.max(0.1, Number(e.target.value) || 1) }))}
+                          style={{ width: "100%", boxSizing: "border-box", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 6, padding: "5px 6px", fontSize: 11, marginBottom: 8, fontFamily: "'DM Sans',sans-serif" }} />
+                        <div style={{ fontSize: 10.5, color: "rgba(0,0,0,0.6)", lineHeight: 1.6, marginBottom: 8 }}>
+                          Budget {Math.round(gaAgg.monthlyBudget).toLocaleString("fr-FR")} €/mois
+                          {gaAgg.cpc != null && <> · CPC {gaAgg.cpc.toFixed(2)} €</>}
+                          {gaAgg.ctr != null && <> · CTR {gaAgg.ctr.toFixed(1)} %</>}
+                          {gaAgg.convRate != null && <> · conversion {gaAgg.convRate.toFixed(1)} %</>}
+                          {gaAgg.cpl != null && <> · coût par conversion {Math.round(gaAgg.cpl)} €</>}
+                          {gaAgg.lostBudget != null && <> · {Math.round(gaAgg.lostBudget)} % d'impressions perdues (budget)</>}
+                          {!gaImport.hasConv && <div style={{ color: "#a6402a" }}>Pas de colonne Conversions : le taux de conversion n'est pas modifié.</div>}
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={applyGaImport} disabled={gaAgg.clicks <= 0}
+                            style={{ flex: 1, padding: "7px 6px", borderRadius: 6, border: "none", background: accent, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: gaAgg.clicks > 0 ? 1 : 0.4 }}>
+                            Appliquer
+                          </button>
+                          <button onClick={() => setGaImport(null)}
+                            style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.15)", background: "transparent", color: "rgba(0,0,0,0.5)", fontSize: 11, cursor: "pointer" }}>
+                            Annuler
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Mode de facturation */}
                 <div style={{ marginBottom: 14 }}>
@@ -1214,7 +1467,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     mode non sélectionné pour éviter un trio incohérent. En CPL,
                     le CPC implicite permet de vérifier que le coût constaté
                     reste cohérent avec le CTR/la conversion saisis. */}
-                {ch.showCtr && (
+                {ch.showCtr && !(ch.searchBased && billing === "cpc") && (
                   <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginTop: -4, marginBottom: 14 }}>
                     {billing === "cpc"
                       ? `≈ CPM ${(cpc * ctr * 10).toFixed(1)} € à ce CTR`
@@ -1244,6 +1497,27 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 </div>
                 <Slider label="Taux de conversion (%)" value={conv} min={0.1} max={20}
                   step={0.1} onChange={setConv} accent={accent} display={`${conv.toFixed(1)} %`} />
+                {biz.hasClosing && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: qualifEnabled ? 10 : 0 }}>
+                      <span style={{ fontSize: 11, color: "rgba(0,0,0,0.55)", fontWeight: 600 }}>Étape « {biz.conversionStage.toLowerCase()} qualifiés »</span>
+                      <button onClick={() => setQualifEnabled(v => !v)} title={qualifEnabled ? "Désactiver" : "Activer"}
+                        style={{ width: 38, height: 20, borderRadius: 11, border: "none", cursor: "pointer", flexShrink: 0,
+                          background: qualifEnabled ? accent : "rgba(0,0,0,0.18)", position: "relative", transition: "background .2s" }}>
+                        <span style={{ position: "absolute", top: 3, left: qualifEnabled ? 21 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+                      </button>
+                    </div>
+                    {qualifEnabled && (
+                      <>
+                        <Slider label={`Part de ${biz.conversionStage.toLowerCase()} qualifiés (%)`} value={qualifRate} min={5} max={100}
+                          step={5} onChange={setQualifRate} accent={accent} display={`${qualifRate} %`} />
+                        <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
+                          Écarte le spam, les démarcheurs et les demandes hors cible. Le taux de closing ci-dessous s'applique alors aux seuls {biz.conversionStage.toLowerCase()} qualifiés.
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {biz.hasClosing && (
                   <div>
                     <Slider label={biz.closingLabel} value={closing} min={1} max={100}
@@ -1346,6 +1620,91 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 )}
               </div>
 
+              {/* Réalisme des résultats : compte existant / nouveau, rendements décroissants */}
+              <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 12 }}>Réalisme des résultats</div>
+
+                <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 6 }}>Type de compte</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  {[["new", "Nouveau compte"], ["existing", "Compte existant"]].map(([k, l]) => (
+                    <button key={k} onClick={() => setAccountType(k)} style={segBtnStyle(accountType === k)}>{l}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginBottom: 14 }}>
+                  {isNewAccount
+                    ? "La montée en charge est appliquée : le CPL baisse sur les premiers mois (environ -25 % à maturité)."
+                    : "Les chiffres saisis viennent d'un compte déjà optimisé : aucune baisse de CPL supplémentaire n'est appliquée."}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: diminishing ? 10 : 0 }}>
+                  <span style={{ fontSize: 11, color: "rgba(0,0,0,0.55)", fontWeight: 600 }}>Le coût monte avec le budget</span>
+                  <button onClick={() => setDiminishing(v => !v)} title={diminishing ? "Désactiver" : "Activer"}
+                    style={{ width: 38, height: 20, borderRadius: 11, border: "none", cursor: "pointer", flexShrink: 0,
+                      background: diminishing ? accent : "rgba(0,0,0,0.18)", position: "relative", transition: "background .2s" }}>
+                    <span style={{ position: "absolute", top: 3, left: diminishing ? 21 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+                  </button>
+                </div>
+                {diminishing && (
+                  <>
+                    <Slider label="Budget de référence (€/mois)" value={Math.min(Math.max(Math.round(refBudget / 100) * 100, 100), 30000)} min={100} max={30000}
+                      step={100} onChange={setRefBudgetOverride} accent={accent} display={`${Math.round(refBudget).toLocaleString("fr-FR")} €`} />
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
+                      Budget auquel le CPC / CPL saisi est réaliste. Au-delà, les derniers leads coûtent plus cher (+15 % de coût unitaire à chaque multiplication du budget par ~2,7, plafonné à ×2,5). Hypothèse à recaler sur des comptes réels.
+                      {refBudgetOverride != null && (
+                        <button onClick={() => setRefBudgetOverride(null)} style={{ marginLeft: 6, background: "none", border: "none", color: accent, fontSize: 10, cursor: "pointer", textDecoration: "underline", padding: 0 }}>
+                          revenir à l'automatique
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Volume de recherche (Search) : plafond d'impressions et saturation */}
+              {ch.searchBased && (
+                <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                  <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 6 }}>Volume de recherche</div>
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginBottom: 10 }}>
+                    Recherches mensuelles de la zone et des mots clés ciblés (Planificateur de mots clés), de janvier à décembre. Elles plafonnent les impressions possibles.
+                  </div>
+                  <textarea placeholder="Coller ici les 12 valeurs (une par ligne, ou séparées par des tabulations ou des points-virgules)"
+                    onPaste={e => { e.preventDefault(); pasteVolumes(e.clipboardData.getData("text")); }}
+                    onChange={() => {}}
+                    rows={2}
+                    style={{ width: "100%", boxSizing: "border-box", resize: "vertical", backgroundColor: "rgba(0,0,0,0.05)", border: `1px solid ${volumePasteError ? "#a6402a" : "rgba(0,0,0,0.12)"}`, borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 11, outline: "none", fontFamily: "'DM Sans',sans-serif", marginBottom: 6 }} />
+                  {volumePasteError && (
+                    <div style={{ fontSize: 10, color: "#a6402a", marginBottom: 6 }}>12 valeurs numériques attendues (janvier à décembre).</div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 6 }}>
+                    {MONTH_NAMES.map((m, i) => (
+                      <label key={i} style={{ display: "flex", flexDirection: "column", fontSize: 9, color: "rgba(0,0,0,0.4)" }}>
+                        {m}
+                        <input type="number" min={0} value={searchVolumes[i] || ""} placeholder="0"
+                          onChange={e => { const v = Math.max(0, Number(e.target.value) || 0); setSearchVolumes(prev => prev.map((x, j) => (j === i ? v : x))); }}
+                          style={{ width: "100%", boxSizing: "border-box", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 6, padding: "5px 4px", color: "#0F332B", fontSize: 11, outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
+                      </label>
+                    ))}
+                  </div>
+                  {volumeActive && (
+                    <button onClick={() => setSearchVolumes(Array(12).fill(0))} style={{ background: "none", border: "none", color: accent, fontSize: 10, cursor: "pointer", textDecoration: "underline", padding: 0, marginBottom: 10 }}>
+                      effacer les volumes
+                    </button>
+                  )}
+                  <Slider label="Part d'impressions atteignable" value={impressionShare} min={30} max={100}
+                    step={5} onChange={setImpressionShare} accent={accent} display={`${impressionShare} %`} />
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
+                    Part des recherches sur lesquelles vos annonces peuvent réellement s'afficher (rang, budget, ciblage). Un plafond réaliste est de 70 à 90 %.
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 5 }}>Impressions perdues faute de budget, si connu (%)</div>
+                  <input type="number" min={0} max={100} value={lostBudgetShare ?? ""} placeholder="non renseigné"
+                    onChange={e => setLostBudgetShare(e.target.value === "" ? null : Math.min(100, Math.max(0, Number(e.target.value))))}
+                    style={{ width: "100%", boxSizing: "border-box", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: 4 }}>
+                    Indicateur « Part d'impressions perdue (budget) » de Google Ads. Au-dessus de 30 %, le compte a encore de la marge : l'alerte de saturation par la population est levée.
+                  </div>
+                </div>
+              )}
+
               {/* Saisonnalité */}
               <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: seasonalityEnabled ? 14 : 0 }}>
@@ -1386,11 +1745,22 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       ))}
                     </div>
 
+                    {/* Effet de la haute saison sur le CPL */}
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 6 }}>Effet de la haute saison sur le {biz.cplShort}</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                      {[["demand", `Demande forte (${biz.cplShort} baisse)`], ["cost", `Concurrence (${biz.cplShort} monte)`]].map(([k, l]) => (
+                        <button key={k} onClick={() => setSeasonEffect(k)} style={segBtnStyle(seasonEffect === k)}>{l}</button>
+                      ))}
+                    </div>
+
                     {/* Coefficient marché */}
-                    <Slider label="Coefficient marché (demande)" value={marketMultiplier} min={1} max={6}
+                    <Slider label={seasonEffect === "cost" ? `Coefficient de coût (${biz.cplShort} en haute saison)` : "Coefficient marché (demande)"} value={marketMultiplier} min={1} max={6}
                       step={0.5} onChange={setMarketMultiplier} accent={accent} display={`×${marketMultiplier.toFixed(1)}`} />
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
-                      À quel point le marché est plus gros en haute saison (plus de recherches, CPL plus bas). N'augmente pas le budget à lui seul.
+                      {seasonEffect === "cost"
+                        ? `En haute saison le ${biz.cplShort} est multiplié par ce coefficient (enchères plus disputées, demande moins qualifiée). À caler sur l'historique du compte.`
+                        : `À quel point le marché est plus gros en haute saison (plus de recherches, ${biz.cplShort} plus bas). N'augmente pas le budget à lui seul.`}
+                      {` Cumulé à la montée en charge, le ${biz.cplShort} ne descend jamais sous ${Math.round(MIN_CPL_FACTOR * 100)} % du ${biz.cplShort} de départ.`}
                     </div>
 
                     {/* Coefficient budget */}
@@ -1463,17 +1833,20 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
             <div style={{ flex: 1, display: "flex", gap: 10 }}>
               <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${G3}` }}>
                 <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROAS</div>
-                <div style={{ color: CREAM, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>×{roas.toFixed(1)}</div>
-                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>{recurring ? "valeur vie / 1 € investi (LTV:CAC)" : "CA pour 1 € investi"}</div>
-              </div>
-              <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${roiPct >= 0 ? G3 : "#a6402a"}` }}>
-                <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROI net</div>
-                <div style={{ color: roiPct >= 0 ? "#4caf50" : ORANGE, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{roiPct >= 0 ? "+" : ""}{Math.round(roiPct)}%</div>
-                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
-                  {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {roiPct >= 0 ? "rentable" : "non rentable"}
+                <div style={{ color: CREAM, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>×{annualRoas.toFixed(1)}</div>
+                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>{recurring ? "valeur vie / 1 € investi (LTV:CAC)" : "CA pour 1 € investi"} · sur 12 mois</div>
+                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="Mois 1 : CPL de départ, sans montée en charge ni saisonnalité">
+                  mois 1 : ×{roas.toFixed(1)}
                 </div>
-                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="ROI net une fois le CPL stabilisé au palier d'apprentissage (mois 4), à budget/objectif constant">
-                  ≈ {matureRoiPct >= 0 ? "+" : ""}{Math.round(matureRoiPct)}% à maturité (mois 4+)
+              </div>
+              <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${annualRoiPct >= 0 ? G3 : "#a6402a"}` }}>
+                <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROI net</div>
+                <div style={{ color: annualRoiPct >= 0 ? "#4caf50" : ORANGE, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{annualRoiPct >= 0 ? "+" : ""}{Math.round(annualRoiPct)}%</div>
+                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
+                  {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {annualRoiPct >= 0 ? "rentable" : "non rentable"} · sur 12 mois
+                </div>
+                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="Mois 1 : CPL de départ, sans montée en charge ni saisonnalité">
+                  mois 1 : {roiPct >= 0 ? "+" : ""}{Math.round(roiPct)}%
                 </div>
               </div>
             </div>
@@ -1481,11 +1854,36 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
           {/* BLOC 2 — secondary KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
-            <KPICard label={`${mode === "budget" ? biz.generatedLabel : biz.objectiveLabel} / mois`} value={fmtLeads(leads)} sub={`${biz.cplShort} ${fmtC(cpl)}`} />
+            <KPICard label={`${mode === "budget" ? biz.generatedLabel : biz.objectiveLabel} / mois`} value={fmtLeads(leads)} sub={`${biz.cplShort} ${fmtC(cpl)}${qualFactor < 1 ? ` · ${fmtC(safeDiv(cpl, qualFactor))} / qualifié` : ""}`} />
             <KPICard label={ch.funnel[1] + " / mois"} value={fmtN(clicks)} sub={`${ctr.toFixed(1)}% de CTR`} />
             <KPICard label={ch.funnel[0] + " / mois"} value={fmtN(impr)} sub="volume estimé" />
             <KPICard label="Budget mensuel" value={fmtC(spend)} accent />
           </div>
+
+          {/* Plafond de volume de recherche : ce canal seul ne suffit pas / saturation proche */}
+          {volumeActive && (cappedMonths.length > 0 || peakUsage >= 0.7) && (() => {
+            const blocked = cappedMonths.length > 0;
+            const worst = seasonalMonths.reduce((a, m) => ((m.usage ?? 0) > (a.usage ?? 0) ? m : a), seasonalMonths[0]);
+            return (
+              <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, display: "flex", gap: 10, alignItems: "flex-start",
+                background: blocked ? "#a6402a22" : accent + "14", border: `1px solid ${blocked ? "#a6402a66" : accent + "44"}` }}>
+                <span style={{ color: blocked ? "#e8843a" : accent, fontSize: 14, lineHeight: 1.3 }}>{blocked ? "⚠" : "ⓘ"}</span>
+                <span style={{ fontSize: 11.5, color: "rgba(255,255,255,0.78)", lineHeight: 1.55 }}>
+                  {blocked ? (
+                    <>
+                      <strong style={{ color: CREAM }}>Ce canal seul ne suffit pas.</strong>{" "}
+                      {cappedMonths.length} mois sur 12 sont plafonnés par le volume de recherche. Au pic, il faudrait ~{fmtN(worst.imprNeeded)} impressions/mois, le volume de recherche n'en offre que ~{fmtN(worst.cap)} (à {impressionShare} % de part d'impressions). Sur 12 mois, seuls {Math.round(volumeCoverage * 100)} % des {biz.conversionStage.toLowerCase()} visés sont atteignables ({fmtLeads(annualLeads)} sur {fmtLeads(annualLeadsUncapped)}) : les chiffres de CA, ROAS et ROI sont déjà calculés avec ce plafond. Pour aller plus loin, élargir la zone ou les mots clés, ou ajouter un autre canal (PMax, Meta).
+                    </>
+                  ) : (
+                    <>
+                      <strong style={{ color: CREAM }}>Saturation proche.</strong>{" "}
+                      Le mois le plus chargé utilise {Math.round(peakUsage * 100)} % des impressions atteignables : au-delà, le canal sature et le {biz.cplShort} réel dépassera la simulation.
+                    </>
+                  )}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* BLOC 3 — funnel */}
           <div style={{ backgroundColor: G5, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${G3}` }}>
@@ -1518,19 +1916,21 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 { label: ch.funnel[0], value: fmtN(impr * mult) },
                 { label: ch.funnel[1], value: fmtN(clicks * mult) },
                 { label: biz.conversionStage, value: fmtLeads(leads * mult) },
+                ...(qualFactor < 1 ? [{ label: `${biz.conversionStage} qualifiés`, value: fmtLeads(qualifiedLeads * mult) }] : []),
                 ...(biz.hasClosing ? [{ label: biz.finalStage, value: fmtLeads(clients * mult) }] : []),
                 { label: caLabel, value: fmtC(caVal) },
               ];
               const fRates = [
                 impr > 0 ? `↓ ${fmtP(clicks / impr * 100)}` : "-",
                 clicks > 0 ? `↓ ${fmtP(leads / clicks * 100)}` : "-",
+                ...(qualFactor < 1 ? [`↓ ${qualifRate}%`] : []),
                 ...(biz.hasClosing ? [`↓ ${closing}%`] : []),
                 recurring ? `× ${fmtN(clientValue)}€ LTV` : `× ${panierMoyen}€`,
               ];
               return <ConversionFunnel stages={fStages} rates={fRates} />;
             })()}
             {/* CPL/CPA par mois d'apprentissage */}
-            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+            <div style={{ display: isNewAccount ? "flex" : "none", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
               {learningTable.map(r => (
                 <div key={r.label} style={{ flex: 1, minWidth: 80, background: G2, borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
                   <div style={{ color: "#5a7a6a", fontSize: 10, marginBottom: 2 }}>{biz.cplShort} {r.label}</div>
@@ -1615,7 +2015,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
           )}
 
               {/* Courbe d'apprentissage — évolution du CPL sur les premiers mois */}
+              {(isNewAccount || lowSignal || pressure > 1.005) && (
               <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
+                {isNewAccount && (<>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6 }}>
                   <div style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 700, fontSize: 13, color: "#F6F1E8" }}>
                     Courbe d'apprentissage
@@ -1652,6 +2054,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     La phase d'apprentissage algorithmique dure ~5 à 12 semaines. Les gains de {biz.cplShort} des premiers mois viennent surtout de l'optimisation continue (mots-clés, audiences, créas) et se stabilisent autour de −25 % à maturité.
                   </span>
                 </div>
+                </>)}
+                {/* Rendements décroissants : coût unitaire majoré par le niveau de budget */}
+                {pressure > 1.005 && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", background: accent + "14", borderRadius: 8, border: `1px solid ${accent}33`, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <span style={{ color: accent, fontSize: 12, lineHeight: 1.4 }}>ⓘ</span>
+                    <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
+                      À {fmtC(spend)}/mois, au-dessus du budget de référence ({fmtC(refBudget)}), le coût unitaire est majoré de {Math.round((pressure - 1) * 100)} % : les derniers {biz.conversionStage.toLowerCase()} coûtent plus cher que les premiers.
+                    </span>
+                  </div>
+                )}
                 {/* Garde-fou : signal insuffisant pour l'algorithme */}
                 {lowSignal && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#a6402a22", borderRadius: 8, border: "1px solid #a6402a66", display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -1662,6 +2074,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </div>
                 )}
               </div>
+              )}
 
               {/* Projection sur 12 mois — pondérée par la saisonnalité */}
               <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
@@ -1682,16 +2095,20 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     const h = Math.max((m.leads / maxMonthLeads) * 100, 2);
                     return (
                       <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                        {m.high && (
-                          <div style={{ fontSize: 8, fontWeight: 700, color: accent, marginBottom: 3 }}>{Math.round(m.leads).toLocaleString("fr-FR")}</div>
-                        )}
-                        <div style={{ width: "100%", height: `${h}%`, minHeight: 2, borderRadius: "3px 3px 0 0",
+                        <div style={{ fontSize: 8, fontWeight: m.high ? 700 : 400, color: m.high ? accent : "rgba(255,255,255,0.4)", marginBottom: 3 }}>{Math.round(m.leads).toLocaleString("fr-FR")}</div>
+                        <div title={m.capped ? `Plafonné par le volume de recherche : ${Math.round(m.leads).toLocaleString("fr-FR")} sur ${Math.round(m.uncappedLeads).toLocaleString("fr-FR")} visés` : undefined}
+                          style={{ width: "100%", height: `${h}%`, minHeight: 2, borderRadius: "3px 3px 0 0",
+                          ...(m.capped ? { borderTop: "3px solid #e8843a" } : {}),
                           background: m.high ? accent : accent + "55", transition: "height .4s cubic-bezier(0.34,1.56,0.64,1)" }} />
                         <div style={{ fontSize: 8.5, color: m.high ? accent : "rgba(255,255,255,0.4)", fontWeight: m.high ? 700 : 400, marginTop: 5 }}>{m.label}</div>
                       </div>
                     );
                   })}
                 </div>
+
+                {cappedMonths.length > 0 && (
+                  <div style={{ fontSize: 9.5, color: "#e8843a", marginTop: 8 }}>Trait orange : mois plafonné par le volume de recherche.</div>
+                )}
 
                 {/* Récap annuel */}
                 <div style={{ display: "flex", marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1716,6 +2133,95 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </div>
                 )}
               </div>
+
+              {/* Synthèse multi-canaux : agglomère les simulations ajoutées canal par canal */}
+              {(() => {
+                const tot = mixItems.reduce((a, m) => ({
+                  spend: a.spend + m.spend, leads: a.leads + m.leads, clients: a.clients + m.clients, ca: a.ca + m.ca, profit: a.profit + m.profit,
+                }), { spend: 0, leads: 0, clients: 0, ca: 0, profit: 0 });
+                const monthlyLeads = tot.leads / 12;
+                const coverage = mixTargetLeads > 0 ? monthlyLeads / mixTargetLeads * 100 : null;
+                const sameStage = mixItems.every(m => m.stage === mixItems[0]?.stage);
+                const stageLabel = sameStage ? (mixItems[0]?.stage ?? "Leads") : "Conversions";
+                const mixRoas = tot.spend > 0 ? tot.ca / tot.spend : 0;
+                const mixRoi = tot.spend > 0 ? tot.profit / tot.spend * 100 : 0;
+                const cell = { fontSize: 11, padding: "7px 0", textAlign: "right", color: "rgba(255,255,255,0.75)", fontVariantNumeric: "tabular-nums" };
+                const head = { fontSize: 8.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.3)", textAlign: "right", paddingBottom: 6 };
+                const cols = "1.6fr 1fr 1fr 1fr 1fr 22px";
+                return (
+                  <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, gap: 10 }}>
+                      <div style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 700, fontSize: 13, color: "#F6F1E8" }}>Synthèse multi-canaux</div>
+                      <button data-export-hide="1" onClick={addToMix} disabled={mixItems.length >= 8}
+                        style={{ background: accent, border: "none", borderRadius: 6, padding: "6px 12px", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, opacity: mixItems.length >= 8 ? 0.4 : 1 }}>
+                        + Ajouter {ch.label}{geoScope === "localisee" && geoZone ? ` · ${FRENCH_REGIONS[geoZone]}` : ""}
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
+                      Réglez un canal, ajoutez-le ici, puis passez au suivant (Search, PMax, Meta...) : les résultats sur 12 mois s'additionnent pour répondre à un objectif que le canal seul ne couvre pas.
+                    </div>
+
+                    {mixItems.length > 0 && (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, marginTop: 14, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                          {["Canal", "Budget / mois", `${stageLabel} / mois`, "CA / an", "ROI net", ""].map((h, i) => (
+                            <span key={i} style={{ ...head, textAlign: i === 0 ? "left" : "right" }}>{h}</span>
+                          ))}
+                        </div>
+                        {mixItems.map(m => (
+                          <div key={m.id} style={{ display: "grid", gridTemplateColumns: cols, gap: 8, borderTop: "1px solid rgba(255,255,255,0.05)", alignItems: "center" }}>
+                            <span style={{ ...cell, textAlign: "left", color: CREAM, fontWeight: 600 }}>{m.name}</span>
+                            <span style={cell}>{fmtC(m.spend / 12)}</span>
+                            <span style={cell}>{fmtLeads(m.leads / 12)}</span>
+                            <span style={cell}>{fmtC(m.ca)}</span>
+                            <span style={cell}>{m.spend > 0 ? `${m.profit >= 0 ? "+" : ""}${Math.round(m.profit / m.spend * 100)}%` : "-"}</span>
+                            <button data-export-hide="1" onClick={() => setMixItems(prev => prev.filter(x => x.id !== m.id))} title="Retirer"
+                              style={{ background: "none", border: "none", color: "rgba(255,255,255,0.35)", cursor: "pointer", fontSize: 13, padding: 0 }}>×</button>
+                          </div>
+                        ))}
+                        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, borderTop: `1px solid ${ORANGE}`, marginTop: 2, alignItems: "center" }}>
+                          <span style={{ ...cell, textAlign: "left", color: ORANGE, fontWeight: 800 }}>Total</span>
+                          <span style={{ ...cell, color: CREAM, fontWeight: 800 }}>{fmtC(tot.spend / 12)}</span>
+                          <span style={{ ...cell, color: CREAM, fontWeight: 800 }}>{fmtLeads(monthlyLeads)}</span>
+                          <span style={{ ...cell, color: CREAM, fontWeight: 800 }}>{fmtC(tot.ca)}</span>
+                          <span style={{ ...cell, color: mixRoi >= 0 ? "#4caf50" : ORANGE, fontWeight: 800 }}>{mixRoi >= 0 ? "+" : ""}{Math.round(mixRoi)}%</span>
+                          <span />
+                        </div>
+                        <div style={{ display: "flex", marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          {[
+                            { l: "Budget 12 mois", v: fmtC(tot.spend) },
+                            { l: `${stageLabel} / an`, v: Math.round(tot.leads).toLocaleString("fr-FR") },
+                            { l: "Ventes / clients / an", v: Math.round(tot.clients).toLocaleString("fr-FR") },
+                            { l: "ROAS global", v: `x${mixRoas.toFixed(2)}` },
+                          ].map((x, i, arr) => (
+                            <div key={i} style={{ flex: 1, textAlign: "center", borderRight: i < arr.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+                              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.27)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{x.l}</div>
+                              <div style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 700, fontSize: 14, color: accent }}>{x.v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Objectif {stageLabel.toLowerCase()} / mois</span>
+                      <input type="number" min={0} value={mixTargetLeads || ""} placeholder="ex. 300"
+                        onChange={e => setMixTargetLeads(Math.max(0, Number(e.target.value) || 0))}
+                        style={{ width: 90, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, padding: "5px 8px", color: CREAM, fontSize: 12, outline: "none" }} />
+                      {coverage != null && mixItems.length > 0 && (
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: coverage >= 100 ? "#4caf50" : "#e8843a" }}>
+                          {coverage >= 100 ? `Objectif couvert (${Math.round(coverage)} %)` : `${Math.round(coverage)} % de l'objectif couvert : il manque ~${fmtLeads(mixTargetLeads - monthlyLeads)} ${stageLabel.toLowerCase()}/mois`}
+                        </span>
+                      )}
+                    </div>
+                    {mixItems.length > 1 && (
+                      <div style={{ marginTop: 12, fontSize: 10, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
+                        Somme simple des canaux, sans recoupement : une même personne touchée par plusieurs canaux peut être comptée plusieurs fois.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
         </div>
       </div>
 
