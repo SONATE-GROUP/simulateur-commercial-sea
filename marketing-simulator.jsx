@@ -412,6 +412,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [gaImport, setGaImport] = useState(null); // { fileName, campaigns, selected, months, monthsDetected, hasConv }
   const [gaError, setGaError]   = useState("");
   const [gaApplied, setGaApplied] = useState("");
+  // Synthèse multi-canaux : instantanés de simulations (un par canal ou zone) que
+  // l'on agglomère. On simule un canal à la fois, puis on l'ajoute à la synthèse.
+  const [mixItems, setMixItems] = useState([]);
+  const [mixTargetLeads, setMixTargetLeads] = useState(0); // objectif de leads / mois, 0 = aucun
   const [refBudgetOverride, setRefBudgetOverride] = useState(null); // null = automatique
   const [budgetMultiplier, setBudgetMultiplier] = useState(1);
   const [prospect, setProspect] = useState("");
@@ -484,6 +488,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     setRefBudgetOverride(clamp(monthly, 100, 30000));
     setGaApplied(`${gaImport.fileName} : ${gaImport.selected.filter(Boolean).length} campagne(s), ${Math.round(gaAgg.monthlyBudget).toLocaleString("fr-FR")} €/mois.`);
     setGaImport(null);
+  };
+  const addToMix = () => {
+    const where = geoScope === "localisee" && geoZone ? ` · ${FRENCH_REGIONS[geoZone]}` : "";
+    setMixItems(prev => [...prev.slice(0, 7), {
+      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+      name: `${ch.label}${where}`, channel, stage: biz.conversionStage,
+      spend: annualSpend, leads: annualLeads, clients: biz.hasClosing ? annualClients : annualLeads,
+      ca: annualCA, profit: annualCA * effectiveMarge / 100 - annualSpend,
+    }]);
   };
   const segBtnStyle = (active) => ({
     flex: 1, padding: "6px 6px", borderRadius: 6, fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer",
@@ -635,6 +648,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (typeof d.diminishing === "boolean") setDiminishing(d.diminishing);
         if (Array.isArray(d.searchVolumes) && d.searchVolumes.length === 12)
           setSearchVolumes(d.searchVolumes.map(v => (Number(v) > 0 ? Number(v) : 0)));
+        if (Array.isArray(d.mixItems)) {
+          const num = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+          setMixItems(d.mixItems.slice(0, 8).filter(m => m && typeof m.name === "string").map((m, i) => ({
+            id: String(m.id ?? i), name: m.name.slice(0, 60), channel: CFG.channels[m.channel] ? m.channel : "google-ads",
+            stage: typeof m.stage === "string" ? m.stage.slice(0, 20) : "Leads",
+            spend: num(m.spend), leads: num(m.leads), clients: num(m.clients), ca: num(m.ca), profit: num(m.profit),
+          })));
+        }
+        if (d.mixTargetLeads >= 0) setMixTargetLeads(Number(d.mixTargetLeads));
         if (d.impressionShare >= 10 && d.impressionShare <= 100) setImpressionShare(d.impressionShare);
         if (d.lostBudgetShare >= 0 && d.lostBudgetShare <= 100) setLostBudgetShare(d.lostBudgetShare);
         if (d.refBudgetOverride > 0) setRefBudgetOverride(d.refBudgetOverride);
@@ -963,6 +985,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         backgroundColor: "#1a2e25",
         useCORS: true,
         logging: false,
+        ignoreElements: (node) => node.dataset?.exportHide === "1",
         onclone: (_, el) => { el.style.paddingBottom = "32px"; },
       })
     );
@@ -1017,7 +1040,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, qualifEnabled, qualifRate, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, haloEnabled, haloRate, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, qualifEnabled, qualifRate, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, mixItems, mixTargetLeads, haloEnabled, haloRate, prospect, website }));
     // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
     // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
     const linkId = currentLinkId ?? genLinkId();
@@ -2110,6 +2133,95 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </div>
                 )}
               </div>
+
+              {/* Synthèse multi-canaux : agglomère les simulations ajoutées canal par canal */}
+              {(() => {
+                const tot = mixItems.reduce((a, m) => ({
+                  spend: a.spend + m.spend, leads: a.leads + m.leads, clients: a.clients + m.clients, ca: a.ca + m.ca, profit: a.profit + m.profit,
+                }), { spend: 0, leads: 0, clients: 0, ca: 0, profit: 0 });
+                const monthlyLeads = tot.leads / 12;
+                const coverage = mixTargetLeads > 0 ? monthlyLeads / mixTargetLeads * 100 : null;
+                const sameStage = mixItems.every(m => m.stage === mixItems[0]?.stage);
+                const stageLabel = sameStage ? (mixItems[0]?.stage ?? "Leads") : "Conversions";
+                const mixRoas = tot.spend > 0 ? tot.ca / tot.spend : 0;
+                const mixRoi = tot.spend > 0 ? tot.profit / tot.spend * 100 : 0;
+                const cell = { fontSize: 11, padding: "7px 0", textAlign: "right", color: "rgba(255,255,255,0.75)", fontVariantNumeric: "tabular-nums" };
+                const head = { fontSize: 8.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.3)", textAlign: "right", paddingBottom: 6 };
+                const cols = "1.6fr 1fr 1fr 1fr 1fr 22px";
+                return (
+                  <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, gap: 10 }}>
+                      <div style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 700, fontSize: 13, color: "#F6F1E8" }}>Synthèse multi-canaux</div>
+                      <button data-export-hide="1" onClick={addToMix} disabled={mixItems.length >= 8}
+                        style={{ background: accent, border: "none", borderRadius: 6, padding: "6px 12px", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", flexShrink: 0, opacity: mixItems.length >= 8 ? 0.4 : 1 }}>
+                        + Ajouter {ch.label}{geoScope === "localisee" && geoZone ? ` · ${FRENCH_REGIONS[geoZone]}` : ""}
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", lineHeight: 1.5 }}>
+                      Réglez un canal, ajoutez-le ici, puis passez au suivant (Search, PMax, Meta...) : les résultats sur 12 mois s'additionnent pour répondre à un objectif que le canal seul ne couvre pas.
+                    </div>
+
+                    {mixItems.length > 0 && (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, marginTop: 14, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                          {["Canal", "Budget / mois", `${stageLabel} / mois`, "CA / an", "ROI net", ""].map((h, i) => (
+                            <span key={i} style={{ ...head, textAlign: i === 0 ? "left" : "right" }}>{h}</span>
+                          ))}
+                        </div>
+                        {mixItems.map(m => (
+                          <div key={m.id} style={{ display: "grid", gridTemplateColumns: cols, gap: 8, borderTop: "1px solid rgba(255,255,255,0.05)", alignItems: "center" }}>
+                            <span style={{ ...cell, textAlign: "left", color: CREAM, fontWeight: 600 }}>{m.name}</span>
+                            <span style={cell}>{fmtC(m.spend / 12)}</span>
+                            <span style={cell}>{fmtLeads(m.leads / 12)}</span>
+                            <span style={cell}>{fmtC(m.ca)}</span>
+                            <span style={cell}>{m.spend > 0 ? `${m.profit >= 0 ? "+" : ""}${Math.round(m.profit / m.spend * 100)}%` : "-"}</span>
+                            <button data-export-hide="1" onClick={() => setMixItems(prev => prev.filter(x => x.id !== m.id))} title="Retirer"
+                              style={{ background: "none", border: "none", color: "rgba(255,255,255,0.35)", cursor: "pointer", fontSize: 13, padding: 0 }}>×</button>
+                          </div>
+                        ))}
+                        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, borderTop: `1px solid ${ORANGE}`, marginTop: 2, alignItems: "center" }}>
+                          <span style={{ ...cell, textAlign: "left", color: ORANGE, fontWeight: 800 }}>Total</span>
+                          <span style={{ ...cell, color: CREAM, fontWeight: 800 }}>{fmtC(tot.spend / 12)}</span>
+                          <span style={{ ...cell, color: CREAM, fontWeight: 800 }}>{fmtLeads(monthlyLeads)}</span>
+                          <span style={{ ...cell, color: CREAM, fontWeight: 800 }}>{fmtC(tot.ca)}</span>
+                          <span style={{ ...cell, color: mixRoi >= 0 ? "#4caf50" : ORANGE, fontWeight: 800 }}>{mixRoi >= 0 ? "+" : ""}{Math.round(mixRoi)}%</span>
+                          <span />
+                        </div>
+                        <div style={{ display: "flex", marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          {[
+                            { l: "Budget 12 mois", v: fmtC(tot.spend) },
+                            { l: `${stageLabel} / an`, v: Math.round(tot.leads).toLocaleString("fr-FR") },
+                            { l: "Ventes / clients / an", v: Math.round(tot.clients).toLocaleString("fr-FR") },
+                            { l: "ROAS global", v: `x${mixRoas.toFixed(2)}` },
+                          ].map((x, i, arr) => (
+                            <div key={i} style={{ flex: 1, textAlign: "center", borderRight: i < arr.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+                              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.27)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{x.l}</div>
+                              <div style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 700, fontSize: 14, color: accent }}>{x.v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Objectif {stageLabel.toLowerCase()} / mois</span>
+                      <input type="number" min={0} value={mixTargetLeads || ""} placeholder="ex. 300"
+                        onChange={e => setMixTargetLeads(Math.max(0, Number(e.target.value) || 0))}
+                        style={{ width: 90, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, padding: "5px 8px", color: CREAM, fontSize: 12, outline: "none" }} />
+                      {coverage != null && mixItems.length > 0 && (
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: coverage >= 100 ? "#4caf50" : "#e8843a" }}>
+                          {coverage >= 100 ? `Objectif couvert (${Math.round(coverage)} %)` : `${Math.round(coverage)} % de l'objectif couvert : il manque ~${fmtLeads(mixTargetLeads - monthlyLeads)} ${stageLabel.toLowerCase()}/mois`}
+                        </span>
+                      )}
+                    </div>
+                    {mixItems.length > 1 && (
+                      <div style={{ marginTop: 12, fontSize: 10, color: "rgba(255,255,255,0.35)", lineHeight: 1.5 }}>
+                        Somme simple des canaux, sans recoupement : une même personne touchée par plusieurs canaux peut être comptée plusieurs fois.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
         </div>
       </div>
 
