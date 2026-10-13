@@ -397,6 +397,12 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // optimisé, la courbe d'apprentissage ne doit pas être appliquée une 2e fois.
   const [accountType, setAccountType] = useState("new"); // "new" | "existing"
   const [diminishing, setDiminishing] = useState(true);
+  // Volume de recherche mensuel de la zone (Planificateur de mots clés), janvier
+  // à décembre. 0 = non renseigné. Sert de plafond d'impressions en Search.
+  const [searchVolumes, setSearchVolumes] = useState(Array(12).fill(0));
+  const [impressionShare, setImpressionShare] = useState(80); // part des recherches réellement atteignable (%)
+  const [lostBudgetShare, setLostBudgetShare] = useState(null); // % d'impressions perdues faute de budget (optionnel)
+  const [volumePasteError, setVolumePasteError] = useState(false);
   const [refBudgetOverride, setRefBudgetOverride] = useState(null); // null = automatique
   const [budgetMultiplier, setBudgetMultiplier] = useState(1);
   const [prospect, setProspect] = useState("");
@@ -419,6 +425,20 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const ch     = CFG.channels[channel];
   const biz    = BUSINESS_TYPES[businessType];
   const accent = ch.color;
+  // Colle 12 valeurs mensuelles (Planificateur de mots clés, tableur) : accepte
+  // retours à la ligne, tabulations, points-virgules ou espaces, et les milliers
+  // espacés ("1 500") quand les valeurs sont une par ligne.
+  const pasteVolumes = (text) => {
+    let tokens = text.trim().split(/[\n\t;]+/).filter(t => t.trim() !== "");
+    if (tokens.length < 12) tokens = text.trim().split(/[\s;]+/).filter(Boolean);
+    const nums = tokens.map(t => Number(t.replace(/[\s\u00a0]/g, "").replace(",", ".")));
+    if (nums.length < 12 || nums.slice(0, 12).some(n => !Number.isFinite(n) || n < 0)) {
+      setVolumePasteError(true);
+      return;
+    }
+    setVolumePasteError(false);
+    setSearchVolumes(nums.slice(0, 12).map(Math.round));
+  };
   const segBtnStyle = (active) => ({
     flex: 1, padding: "6px 6px", borderRadius: 6, fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer",
     ...(active ? { background: accent, border: `1px solid ${accent}`, color: "#fff" }
@@ -565,6 +585,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (d.seasonEffect === "demand" || d.seasonEffect === "cost") setSeasonEffect(d.seasonEffect);
         if (d.accountType === "new" || d.accountType === "existing") setAccountType(d.accountType);
         if (typeof d.diminishing === "boolean") setDiminishing(d.diminishing);
+        if (Array.isArray(d.searchVolumes) && d.searchVolumes.length === 12)
+          setSearchVolumes(d.searchVolumes.map(v => (Number(v) > 0 ? Number(v) : 0)));
+        if (d.impressionShare >= 10 && d.impressionShare <= 100) setImpressionShare(d.impressionShare);
+        if (d.lostBudgetShare >= 0 && d.lostBudgetShare <= 100) setLostBudgetShare(d.lostBudgetShare);
         if (d.refBudgetOverride > 0) setRefBudgetOverride(d.refBudgetOverride);
         if (d.budgetMultiplier >= 1) setBudgetMultiplier(d.budgetMultiplier);
         else if (d.highSeasonMultiplier >= 1) setMarketMultiplier(d.highSeasonMultiplier); // lien genere avant la separation marche/budget
@@ -641,6 +665,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     for (let i = 0; i < 6; i++) x = raw * pressureOf(x);
     return x;
   };
+
+  // Plafond d'impressions par mois civil (Search uniquement) : volume de recherche
+  // x part d'impressions atteignable. null = pas de plafond (volume non renseigné).
+  const volumeActive = !!ch.searchBased && searchVolumes.some(v => v > 0);
+  const impressionCap = calMonth => (volumeActive && searchVolumes[calMonth] > 0 ? searchVolumes[calMonth] * impressionShare / 100 : null);
 
   const isCpm = billing === "cpm";
   const isCplBilling = billing === "cpl";
@@ -743,7 +772,12 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // reste nécessaire pour faire tourner une campagne, quelle que soit la
   // taille du marché local). Marge de ×2,5 avant de déclencher l'alerte.
   const localBudgetCeiling = nationalRefBudget * Math.max(regionShare, 0.1) * 2.5;
-  const budgetHighForZone = geoScope === "localisee" && !!geoZone && nationalRefBudget > 0 && spend > localBudgetCeiling;
+  // L'alerte démographique est un repère grossier : quand le volume de recherche
+  // est renseigné, c'est lui qui juge la saturation ; et si le compte perd déjà
+  // une part notable d'impressions faute de budget, il n'est pas saturé.
+  const hasBudgetHeadroom = lostBudgetShare != null && lostBudgetShare >= 30;
+  const budgetHighForZone = geoScope === "localisee" && !!geoZone && nationalRefBudget > 0 && spend > localBudgetCeiling
+    && !volumeActive && !hasBudgetHeadroom;
 
   // Projection sur 12 mois combinant DEUX effets, mois par mois :
   //  • Apprentissage : le CPL/CPA baisse les premiers mois (LEARNING_STEPS),
@@ -795,9 +829,19 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       mLeads = leads * budgetCoef;
       mSpend = spendWithPressure(spend / pressure * budgetCoef * cplFactor);
     }
+    // Plafond de volume : on ne peut pas afficher plus d'impressions que les
+    // recherches disponibles. Au-delà, leads et dépense sont ramenés au plafond
+    // (le budget non dépensable reste inutilisé).
+    const mImprNeeded = safeDiv(mLeads, (conv / 100) * (ctr / 100));
+    const cap = impressionCap(calMonth);
+    const capFactor = cap != null && mImprNeeded > cap ? cap / mImprNeeded : 1;
+    const uncappedLeads = mLeads;
+    mLeads *= capFactor;
+    mSpend *= capFactor;
     const mClients = biz.hasClosing ? mLeads * closing / 100 : mLeads;
     const mCA      = mClients * clientValue;
     return {
+      capped: capFactor < 1, cap, usage: cap != null ? mImprNeeded / cap : null, uncappedLeads, imprNeeded: mImprNeeded,
       label: seasonalityEnabled ? MONTH_NAMES[calMonth] : `M${i + 1}`,
       high, marketCoef, budgetCoef,
       leads: mLeads,
@@ -812,6 +856,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const annualSpend   = seasonalMonths.reduce((s, m) => s + m.spend, 0);
   const annualRoas    = annualSpend > 0 ? annualCA / annualSpend : 0;
   const annualRoiPct  = annualSpend > 0 ? (annualCA * effectiveMarge / 100 - annualSpend) / annualSpend * 100 : 0;
+  const cappedMonths = seasonalMonths.filter(m => m.capped);
+  const annualLeadsUncapped = seasonalMonths.reduce((s, m) => s + m.uncappedLeads, 0);
+  const peakUsage = Math.max(0, ...seasonalMonths.map(m => m.usage ?? 0));
+  // Part de l'objectif / du volume espéré réellement atteignable sur 12 mois.
+  const volumeCoverage = annualLeadsUncapped > 0 ? annualLeads / annualLeadsUncapped : 1;
   const maxMonthLeads = Math.max(...seasonalMonths.map(m => m.leads), 1);
 
   // Cycle de vente : un lead du mois i se conclut ~ (cycleVente − 1) mois plus
@@ -917,7 +966,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, haloEnabled, haloRate, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, haloEnabled, haloRate, prospect, website }));
     // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
     // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
     const linkId = currentLinkId ?? genLinkId();
@@ -1439,6 +1488,51 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 )}
               </div>
 
+              {/* Volume de recherche (Search) : plafond d'impressions et saturation */}
+              {ch.searchBased && (
+                <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                  <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 6 }}>Volume de recherche</div>
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginBottom: 10 }}>
+                    Recherches mensuelles de la zone et des mots clés ciblés (Planificateur de mots clés), de janvier à décembre. Elles plafonnent les impressions possibles.
+                  </div>
+                  <textarea placeholder="Coller ici les 12 valeurs (une par ligne, ou séparées par des tabulations ou des points-virgules)"
+                    onPaste={e => { e.preventDefault(); pasteVolumes(e.clipboardData.getData("text")); }}
+                    onChange={() => {}}
+                    rows={2}
+                    style={{ width: "100%", boxSizing: "border-box", resize: "vertical", backgroundColor: "rgba(0,0,0,0.05)", border: `1px solid ${volumePasteError ? "#a6402a" : "rgba(0,0,0,0.12)"}`, borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 11, outline: "none", fontFamily: "'DM Sans',sans-serif", marginBottom: 6 }} />
+                  {volumePasteError && (
+                    <div style={{ fontSize: 10, color: "#a6402a", marginBottom: 6 }}>12 valeurs numériques attendues (janvier à décembre).</div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 6 }}>
+                    {MONTH_NAMES.map((m, i) => (
+                      <label key={i} style={{ display: "flex", flexDirection: "column", fontSize: 9, color: "rgba(0,0,0,0.4)" }}>
+                        {m}
+                        <input type="number" min={0} value={searchVolumes[i] || ""} placeholder="0"
+                          onChange={e => { const v = Math.max(0, Number(e.target.value) || 0); setSearchVolumes(prev => prev.map((x, j) => (j === i ? v : x))); }}
+                          style={{ width: "100%", boxSizing: "border-box", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 6, padding: "5px 4px", color: "#0F332B", fontSize: 11, outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
+                      </label>
+                    ))}
+                  </div>
+                  {volumeActive && (
+                    <button onClick={() => setSearchVolumes(Array(12).fill(0))} style={{ background: "none", border: "none", color: accent, fontSize: 10, cursor: "pointer", textDecoration: "underline", padding: 0, marginBottom: 10 }}>
+                      effacer les volumes
+                    </button>
+                  )}
+                  <Slider label="Part d'impressions atteignable" value={impressionShare} min={30} max={100}
+                    step={5} onChange={setImpressionShare} accent={accent} display={`${impressionShare} %`} />
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
+                    Part des recherches sur lesquelles vos annonces peuvent réellement s'afficher (rang, budget, ciblage). Un plafond réaliste est de 70 à 90 %.
+                  </div>
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 5 }}>Impressions perdues faute de budget, si connu (%)</div>
+                  <input type="number" min={0} max={100} value={lostBudgetShare ?? ""} placeholder="non renseigné"
+                    onChange={e => setLostBudgetShare(e.target.value === "" ? null : Math.min(100, Math.max(0, Number(e.target.value))))}
+                    style={{ width: "100%", boxSizing: "border-box", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 8, padding: "7px 8px", color: "#0F332B", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" }} />
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: 4 }}>
+                    Indicateur « Part d'impressions perdue (budget) » de Google Ads. Au-dessus de 30 %, le compte a encore de la marge : l'alerte de saturation par la population est levée.
+                  </div>
+                </div>
+              )}
+
               {/* Saisonnalité */}
               <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: seasonalityEnabled ? 14 : 0 }}>
@@ -1593,6 +1687,31 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
             <KPICard label={ch.funnel[0] + " / mois"} value={fmtN(impr)} sub="volume estimé" />
             <KPICard label="Budget mensuel" value={fmtC(spend)} accent />
           </div>
+
+          {/* Plafond de volume de recherche : ce canal seul ne suffit pas / saturation proche */}
+          {volumeActive && (cappedMonths.length > 0 || peakUsage >= 0.7) && (() => {
+            const blocked = cappedMonths.length > 0;
+            const worst = seasonalMonths.reduce((a, m) => ((m.usage ?? 0) > (a.usage ?? 0) ? m : a), seasonalMonths[0]);
+            return (
+              <div style={{ marginBottom: 14, padding: "12px 14px", borderRadius: 10, display: "flex", gap: 10, alignItems: "flex-start",
+                background: blocked ? "#a6402a22" : accent + "14", border: `1px solid ${blocked ? "#a6402a66" : accent + "44"}` }}>
+                <span style={{ color: blocked ? "#e8843a" : accent, fontSize: 14, lineHeight: 1.3 }}>{blocked ? "⚠" : "ⓘ"}</span>
+                <span style={{ fontSize: 11.5, color: "rgba(255,255,255,0.78)", lineHeight: 1.55 }}>
+                  {blocked ? (
+                    <>
+                      <strong style={{ color: CREAM }}>Ce canal seul ne suffit pas.</strong>{" "}
+                      {cappedMonths.length} mois sur 12 sont plafonnés par le volume de recherche. Au pic, il faudrait ~{fmtN(worst.imprNeeded)} impressions/mois, le volume de recherche n'en offre que ~{fmtN(worst.cap)} (à {impressionShare} % de part d'impressions). Sur 12 mois, seuls {Math.round(volumeCoverage * 100)} % des {biz.conversionStage.toLowerCase()} visés sont atteignables ({fmtLeads(annualLeads)} sur {fmtLeads(annualLeadsUncapped)}) : les chiffres de CA, ROAS et ROI sont déjà calculés avec ce plafond. Pour aller plus loin, élargir la zone ou les mots clés, ou ajouter un autre canal (PMax, Meta).
+                    </>
+                  ) : (
+                    <>
+                      <strong style={{ color: CREAM }}>Saturation proche.</strong>{" "}
+                      Le mois le plus chargé utilise {Math.round(peakUsage * 100)} % des impressions atteignables : au-delà, le canal sature et le {biz.cplShort} réel dépassera la simulation.
+                    </>
+                  )}
+                </span>
+              </div>
+            );
+          })()}
 
           {/* BLOC 3 — funnel */}
           <div style={{ backgroundColor: G5, borderRadius: 10, padding: 16, marginBottom: 14, border: `1px solid ${G3}` }}>
@@ -1803,13 +1922,19 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     return (
                       <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
                         <div style={{ fontSize: 8, fontWeight: m.high ? 700 : 400, color: m.high ? accent : "rgba(255,255,255,0.4)", marginBottom: 3 }}>{Math.round(m.leads).toLocaleString("fr-FR")}</div>
-                        <div style={{ width: "100%", height: `${h}%`, minHeight: 2, borderRadius: "3px 3px 0 0",
+                        <div title={m.capped ? `Plafonné par le volume de recherche : ${Math.round(m.leads).toLocaleString("fr-FR")} sur ${Math.round(m.uncappedLeads).toLocaleString("fr-FR")} visés` : undefined}
+                          style={{ width: "100%", height: `${h}%`, minHeight: 2, borderRadius: "3px 3px 0 0",
+                          ...(m.capped ? { borderTop: "3px solid #e8843a" } : {}),
                           background: m.high ? accent : accent + "55", transition: "height .4s cubic-bezier(0.34,1.56,0.64,1)" }} />
                         <div style={{ fontSize: 8.5, color: m.high ? accent : "rgba(255,255,255,0.4)", fontWeight: m.high ? 700 : 400, marginTop: 5 }}>{m.label}</div>
                       </div>
                     );
                   })}
                 </div>
+
+                {cappedMonths.length > 0 && (
+                  <div style={{ fontSize: 9.5, color: "#e8843a", marginTop: 8 }}>Trait orange : mois plafonné par le volume de recherche.</div>
+                )}
 
                 {/* Récap annuel */}
                 <div style={{ display: "flex", marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
