@@ -86,7 +86,7 @@ export const CHANNEL_SECTOR_DEFAULTS = {
     assurance: { cpc: 15, ctr: 5, conversionRate: 2.5, budget: 8000 },
     immo: { cpc: 4, ctr: 5, conversionRate: 3, budget: 4000 },
     batiment: { cpc: 5, ctr: 4.5, conversionRate: 3.5, budget: 3500 },
-    energie: { cpc: 8, ctr: 4.5, conversionRate: 3, budget: 5000 },
+    energie: { cpc: 4.5, ctr: 6.5, conversionRate: 3.5, budget: 5000 },
     artisanat: { cpc: 6, ctr: 5, conversionRate: 5, budget: 2500 },
     auto: { cpc: 2.5, ctr: 5, conversionRate: 3, budget: 3000 },
     sante: { cpc: 4, ctr: 4.5, conversionRate: 3, budget: 3000 },
@@ -164,6 +164,26 @@ export const CHANNEL_SECTOR_DEFAULTS = {
     ecom: { cpc: 0.5, ctr: 1.8, conversionRate: 2, budget: 1200 },
   },
 };
+
+// Provenance des valeurs de départ ci-dessus. Aucune n'est une moyenne officielle
+// de marché : ce sont des ordres de grandeur. Seules les entrées listées dans
+// CALIBRATED_DEFAULTS ont été recalées sur un compte réel ; toutes les autres
+// restent des estimations non vérifiées.
+const CALIBRATED_DEFAULTS = {
+  "google-ads": {
+    energie:
+      "Recalé sur un compte réel (Rénoouest, isolation des combles, Search, Pays de la Loire : CPC 4,2 €, CTR 8 %, conversion 4,2 % sur landing), puis arrondi vers une valeur prudente pour un prospect sans historique.",
+  },
+};
+const ESTIMATE_NOTE =
+  "Estimation Sonate non vérifiée (ordre de grandeur du marché français, sans source chiffrée). À remplacer par les chiffres du compte, ou par un benchmark réel dès qu'il existe.";
+
+export function getDefaultsSource(channel, sector) {
+  const detail = CALIBRATED_DEFAULTS[channel]?.[sector];
+  return detail
+    ? { calibrated: true, label: "Calé sur un compte réel", detail }
+    : { calibrated: false, label: "Estimation non vérifiée", detail: ESTIMATE_NOTE };
+}
 
 // Cycle de vente typique par secteur (en mois). Sert à pré-remplir le sélecteur
 // "Durée du cycle de vente" : achat immédiat (1) pour le B2C/e-commerce, cycles

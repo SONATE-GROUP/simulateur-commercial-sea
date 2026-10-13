@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit } from "./src/config/defaults";
+import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit, getDefaultsSource } from "./src/config/defaults";
 import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
 
 const CFG = {
@@ -379,6 +379,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [haloEnabled, setHaloEnabled] = useState(false);
   const [haloRate, setHaloRate]       = useState(0.25);
   const [closing, setClosing]         = useState(20);
+  // Étape facultative entre leads et clients : part des leads réellement
+  // qualifiés (hors spam, hors hors-cible). Désactivée : tous les leads comptent.
+  const [qualifEnabled, setQualifEnabled] = useState(false);
+  const [qualifRate, setQualifRate]       = useState(70);
   const [cycleVente, setCycleVente]   = useState(1);
   const [seasonalityEnabled, setSeasonalityEnabled] = useState(false);
   const [startMonth, setStartMonth]   = useState(0);
@@ -576,6 +580,8 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (typeof d.haloEnabled === "boolean") setHaloEnabled(d.haloEnabled);
         if (d.haloRate >= 0) setHaloRate(d.haloRate);
         if (d.closing > 0)     setClosing(d.closing);
+        if (typeof d.qualifEnabled === "boolean") setQualifEnabled(d.qualifEnabled);
+        if (d.qualifRate >= 1 && d.qualifRate <= 100) setQualifRate(d.qualifRate);
         if (d.cycleVente >= 1 && d.cycleVente <= 12) setCycleVente(d.cycleVente);
         if (typeof d.seasonalityEnabled === "boolean") setSeasonalityEnabled(d.seasonalityEnabled);
         if (d.startMonth >= 0 && d.startMonth <= 11) setStartMonth(d.startMonth);
@@ -707,7 +713,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   }
   cpl = leads > 0 ? safeDiv(mode === "budget" ? budget : budgetOut, leads) : 0;
   // En e-commerce la conversion EST une vente : pas d'étape de closing distincte.
-  const clients     = biz.hasClosing ? Math.round(leads * closing / 100) : leads;
+  // Avec l'étape "leads qualifiés", le closing s'applique aux seuls leads qualifiés.
+  const qualFactor  = qualifEnabled && biz.hasClosing ? qualifRate / 100 : 1;
+  const qualifiedLeads = leads * qualFactor;
+  const clients     = biz.hasClosing ? Math.round(leads * qualFactor * closing / 100) : leads;
   // Valeur d'un client : panier unique (revenu ponctuel) ou valeur vie client
   //  (LTV = revenu mensuel × durée de vie) pour un revenu récurrent / abonnement.
   const recurring   = revenueType === "recurrent";
@@ -733,7 +742,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // modifie ni leads/clients/CA, ni CPL/ROI/budget affichés ailleurs.
   const haloNonConverted = Math.max(0, clicks - leads);
   const haloLeads   = haloEnabled ? Math.round(haloNonConverted * haloRate / 100) : 0;
-  const haloClients = biz.hasClosing ? Math.round(haloLeads * closing / 100) : haloLeads;
+  const haloClients = biz.hasClosing ? Math.round(haloLeads * qualFactor * closing / 100) : haloLeads;
   const haloCA      = haloClients * clientValue;
 
   // Répartition des leads entre types de contact (formulaire, appel, RDV...),
@@ -838,7 +847,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     const uncappedLeads = mLeads;
     mLeads *= capFactor;
     mSpend *= capFactor;
-    const mClients = biz.hasClosing ? mLeads * closing / 100 : mLeads;
+    const mClients = biz.hasClosing ? mLeads * qualFactor * closing / 100 : mLeads;
     const mCA      = mClients * clientValue;
     return {
       capped: capFactor < 1, cap, usage: cap != null ? mImprNeeded / cap : null, uncappedLeads, imprNeeded: mImprNeeded,
@@ -966,7 +975,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, haloEnabled, haloRate, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, qualifEnabled, qualifRate, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, haloEnabled, haloRate, prospect, website }));
     // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
     // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
     const linkId = currentLinkId ?? genLinkId();
@@ -1273,7 +1282,25 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
               {/* Sliders */}
               <div style={{ background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
-                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 14 }}>Paramètres du canal</div>
+                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 8 }}>Paramètres du canal</div>
+                {(() => {
+                  const d = getDefaultValues(channel, sector);
+                  if (!d) return null;
+                  const untouched = cpc === d.cpc && ctr === d.ctr && conv === Math.round(d.conversionRate * getSupportFactor(support) * 10) / 10;
+                  const src = getDefaultsSource(channel, sector);
+                  return (
+                    <div style={{ fontSize: 10, lineHeight: 1.5, marginBottom: 14, padding: "7px 9px", borderRadius: 7,
+                      background: untouched && !src.calibrated ? "#a6402a10" : "rgba(0,0,0,0.04)", color: "rgba(0,0,0,0.5)" }}>
+                      {untouched ? (
+                        <>
+                          <strong style={{ color: src.calibrated ? "#2f7a46" : "#7a3520" }}>{src.label}.</strong>{" "}{src.detail}
+                        </>
+                      ) : (
+                        "Valeurs saisies à la main : elles remplacent les valeurs de départ du secteur."
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Mode de facturation */}
                 <div style={{ marginBottom: 14 }}>
@@ -1346,6 +1373,27 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 </div>
                 <Slider label="Taux de conversion (%)" value={conv} min={0.1} max={20}
                   step={0.1} onChange={setConv} accent={accent} display={`${conv.toFixed(1)} %`} />
+                {biz.hasClosing && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: qualifEnabled ? 10 : 0 }}>
+                      <span style={{ fontSize: 11, color: "rgba(0,0,0,0.55)", fontWeight: 600 }}>Étape « {biz.conversionStage.toLowerCase()} qualifiés »</span>
+                      <button onClick={() => setQualifEnabled(v => !v)} title={qualifEnabled ? "Désactiver" : "Activer"}
+                        style={{ width: 38, height: 20, borderRadius: 11, border: "none", cursor: "pointer", flexShrink: 0,
+                          background: qualifEnabled ? accent : "rgba(0,0,0,0.18)", position: "relative", transition: "background .2s" }}>
+                        <span style={{ position: "absolute", top: 3, left: qualifEnabled ? 21 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+                      </button>
+                    </div>
+                    {qualifEnabled && (
+                      <>
+                        <Slider label={`Part de ${biz.conversionStage.toLowerCase()} qualifiés (%)`} value={qualifRate} min={5} max={100}
+                          step={5} onChange={setQualifRate} accent={accent} display={`${qualifRate} %`} />
+                        <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
+                          Écarte le spam, les démarcheurs et les demandes hors cible. Le taux de closing ci-dessous s'applique alors aux seuls {biz.conversionStage.toLowerCase()} qualifiés.
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {biz.hasClosing && (
                   <div>
                     <Slider label={biz.closingLabel} value={closing} min={1} max={100}
@@ -1682,7 +1730,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
           {/* BLOC 2 — secondary KPIs */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
-            <KPICard label={`${mode === "budget" ? biz.generatedLabel : biz.objectiveLabel} / mois`} value={fmtLeads(leads)} sub={`${biz.cplShort} ${fmtC(cpl)}`} />
+            <KPICard label={`${mode === "budget" ? biz.generatedLabel : biz.objectiveLabel} / mois`} value={fmtLeads(leads)} sub={`${biz.cplShort} ${fmtC(cpl)}${qualFactor < 1 ? ` · ${fmtC(safeDiv(cpl, qualFactor))} / qualifié` : ""}`} />
             <KPICard label={ch.funnel[1] + " / mois"} value={fmtN(clicks)} sub={`${ctr.toFixed(1)}% de CTR`} />
             <KPICard label={ch.funnel[0] + " / mois"} value={fmtN(impr)} sub="volume estimé" />
             <KPICard label="Budget mensuel" value={fmtC(spend)} accent />
@@ -1744,12 +1792,14 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 { label: ch.funnel[0], value: fmtN(impr * mult) },
                 { label: ch.funnel[1], value: fmtN(clicks * mult) },
                 { label: biz.conversionStage, value: fmtLeads(leads * mult) },
+                ...(qualFactor < 1 ? [{ label: `${biz.conversionStage} qualifiés`, value: fmtLeads(qualifiedLeads * mult) }] : []),
                 ...(biz.hasClosing ? [{ label: biz.finalStage, value: fmtLeads(clients * mult) }] : []),
                 { label: caLabel, value: fmtC(caVal) },
               ];
               const fRates = [
                 impr > 0 ? `↓ ${fmtP(clicks / impr * 100)}` : "-",
                 clicks > 0 ? `↓ ${fmtP(leads / clicks * 100)}` : "-",
+                ...(qualFactor < 1 ? [`↓ ${qualifRate}%`] : []),
                 ...(biz.hasClosing ? [`↓ ${closing}%`] : []),
                 recurring ? `× ${fmtN(clientValue)}€ LTV` : `× ${panierMoyen}€`,
               ];
