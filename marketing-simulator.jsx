@@ -322,6 +322,19 @@ const LEARNING_STEPS = [
 // optimiser : ~30 conv/mois (recommandation Google Smart Bidding ; Meta ~50/sem).
 const MIN_SIGNAL_CONV = 30;
 
+// Rendements décroissants : au-delà du budget de référence (celui auquel le
+// CPC/CPL saisi est réaliste), les dernières enchères captent des requêtes moins
+// qualifiées et plus disputées, donc le coût unitaire monte. Hypothèse prudente :
+// +15 % de coût unitaire à chaque multiplication du budget par e (~2,7), plafonné
+// à ×2,5. À recaler avec des comptes réels.
+const DIMINISHING_K = 0.15;
+const DIMINISHING_MAX = 2.5;
+const costPressure = (spend, ref) =>
+  ref > 0 && spend > ref ? Math.min(DIMINISHING_MAX, 1 + DIMINISHING_K * Math.log(spend / ref)) : 1;
+// Garde-fou : cumulées, la montée en charge et la saisonnalité ne peuvent pas
+// diviser le CPL de départ par plus de 2.
+const MIN_CPL_FACTOR = 0.5;
+
 // ─── Saisonnalité (logique portée du simulateur SEO) ─────────
 // Les mois cochés en "haute saison" voient leurs résultats pondérés par un
 // coefficient ; les autres restent à ×1. `startMonth` décale le calendrier.
@@ -376,6 +389,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   //  - budgetMultiplier : ce que VOUS choisissez d'investir en plus (ou pas)
   //    pour capter cette demande. À 1, vous n'augmentez pas votre budget.
   const [marketMultiplier, setMarketMultiplier] = useState(3);
+  // "demand" : la haute saison = plus de demande, CPL plus bas (logique historique).
+  // "cost"   : la haute saison = concurrence/coûts plus élevés, CPL plus haut
+  //            (ex. rénovation énergétique : l'hiver est le mois le plus cher).
+  const [seasonEffect, setSeasonEffect] = useState("demand");
+  // Compte existant : les CPC/CTR/conversion saisis viennent d'un compte déjà
+  // optimisé, la courbe d'apprentissage ne doit pas être appliquée une 2e fois.
+  const [accountType, setAccountType] = useState("new"); // "new" | "existing"
+  const [diminishing, setDiminishing] = useState(true);
+  const [refBudgetOverride, setRefBudgetOverride] = useState(null); // null = automatique
   const [budgetMultiplier, setBudgetMultiplier] = useState(1);
   const [prospect, setProspect] = useState("");
   const [logo, setLogo]       = useState(null);
@@ -397,6 +419,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const ch     = CFG.channels[channel];
   const biz    = BUSINESS_TYPES[businessType];
   const accent = ch.color;
+  const segBtnStyle = (active) => ({
+    flex: 1, padding: "6px 6px", borderRadius: 6, fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer",
+    ...(active ? { background: accent, border: `1px solid ${accent}`, color: "#fff" }
+               : { background: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", color: "rgba(0,0,0,0.5)" }),
+  });
   // Lecteur = lecture seule : pas d'enregistrement. Consultation (prospect) non plus.
   const canSave = !consultation && user?.role !== "Lecteur";
   // Ajuste manuellement la part d'un type de contact : les autres types
@@ -535,6 +562,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
         if (Array.isArray(d.highSeasonMonths) && d.highSeasonMonths.length === 12)
           setHighSeasonMonths(d.highSeasonMonths.map(Boolean));
         if (d.marketMultiplier >= 1) setMarketMultiplier(d.marketMultiplier);
+        if (d.seasonEffect === "demand" || d.seasonEffect === "cost") setSeasonEffect(d.seasonEffect);
+        if (d.accountType === "new" || d.accountType === "existing") setAccountType(d.accountType);
+        if (typeof d.diminishing === "boolean") setDiminishing(d.diminishing);
+        if (d.refBudgetOverride > 0) setRefBudgetOverride(d.refBudgetOverride);
         if (d.budgetMultiplier >= 1) setBudgetMultiplier(d.budgetMultiplier);
         else if (d.highSeasonMultiplier >= 1) setMarketMultiplier(d.highSeasonMultiplier); // lien genere avant la separation marche/budget
         if (d.prospect)    setProspect(d.prospect);
@@ -595,23 +626,42 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   let impr = 0, clicks = 0, leads = 0, cpl = 0, budgetOut = 0;
   const safeDiv = (a, b) => b > 0 ? a / b : 0;
 
+  // Budget de référence des rendements décroissants : budget national indicatif
+  // du couple canal x secteur, ramené au poids de la région en zone localisée
+  // (plancher 10 %). Modifiable : c'est le budget auquel le CPC/CPL saisi tient.
+  const nationalRefBudget = getDefaultValues(channel, sector)?.budget ?? 0;
+  const regionShare = geoZone ? getRegionPopulationShare(geoZone) : 0;
+  const autoRefBudget = nationalRefBudget * (geoScope === "localisee" && geoZone ? Math.max(regionShare, 0.1) : 1);
+  const refBudget = refBudgetOverride ?? autoRefBudget;
+  const pressureOf = s => (diminishing ? costPressure(s, refBudget) : 1);
+  // Dépense réelle pour un coût "de base" donné : le coût unitaire dépend du
+  // budget, qui dépend lui-même du coût unitaire. Point fixe en quelques tours.
+  const spendWithPressure = raw => {
+    let x = raw;
+    for (let i = 0; i < 6; i++) x = raw * pressureOf(x);
+    return x;
+  };
+
   const isCpm = billing === "cpm";
   const isCplBilling = billing === "cpl";
+  // Facteur de coût appliqué au niveau de budget simulé (1 = pas de pression).
+  let pressure = 1;
   if (mode === "budget") {
+    pressure = pressureOf(budget);
     if (isCplBilling) {
       // CPL direct : le budget achète des leads à un coût unitaire connu ou
       // constaté (chez un confrère, ou par expérience). Clics et impressions
       // sont reconstruits pour l'entonnoir via le CTR et le taux de conversion.
-      leads = Math.round(safeDiv(budget, cplTarget));
+      leads = Math.round(safeDiv(budget, cplTarget * pressure));
       clicks = Math.round(safeDiv(leads, conv / 100));
       impr = Math.round(safeDiv(clicks, ctr / 100));
     } else if (isCpm) {
       // CPM : le budget achète des impressions, les clics en découlent via le CTR.
-      impr = Math.round(safeDiv(budget, cpm) * 1000);
+      impr = Math.round(safeDiv(budget, cpm * pressure) * 1000);
       clicks = Math.round(impr * ctr / 100);
       leads = Math.round(clicks * conv / 100);
     } else {
-      clicks = Math.round(safeDiv(budget, cpc));
+      clicks = Math.round(safeDiv(budget, cpc * pressure));
       impr = Math.round(safeDiv(clicks, ctr / 100));
       leads = Math.round(clicks * conv / 100);
     }
@@ -620,9 +670,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     leads = tLeads;
     clicks = Math.round(safeDiv(leads, conv / 100));
     impr = Math.round(safeDiv(clicks, ctr / 100));
-    budgetOut = isCplBilling ? Math.round(leads * cplTarget)
-      : isCpm ? Math.round(safeDiv(impr, 1000) * cpm)
-      : Math.round(clicks * cpc);
+    const rawBudget = isCplBilling ? leads * cplTarget
+      : isCpm ? safeDiv(impr, 1000) * cpm
+      : clicks * cpc;
+    budgetOut = Math.round(spendWithPressure(rawBudget));
+    pressure = rawBudget > 0 ? budgetOut / rawBudget : 1;
   }
   cpl = leads > 0 ? safeDiv(mode === "budget" ? budget : budgetOut, leads) : 0;
   // En e-commerce la conversion EST une vente : pas d'étape de closing distincte.
@@ -671,6 +723,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // Courbe d'apprentissage : évolution du CPL/CPA sur les premiers mois.
   // Le tableau détaillé dérive des mêmes paliers que le graphique (LEARNING_STEPS)
   // plutôt que de dupliquer les pourcentages, pour ne jamais désynchroniser les deux.
+  const isNewAccount = accountType === "new";
   const learningData = LEARNING_STEPS.map(s => ({ ...s, cpl: cpl * s.mult }));
   const learningTable = LEARNING_STEPS.map((s, i) => ({
     label: `Mois ${i + 1}`,
@@ -689,8 +742,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // être trop agressif sur les très petites régions (un minimum de budget
   // reste nécessaire pour faire tourner une campagne, quelle que soit la
   // taille du marché local). Marge de ×2,5 avant de déclencher l'alerte.
-  const nationalRefBudget = getDefaultValues(channel, sector)?.budget ?? 0;
-  const regionShare = geoZone ? getRegionPopulationShare(geoZone) : 0;
   const localBudgetCeiling = nationalRefBudget * Math.max(regionShare, 0.1) * 2.5;
   const budgetHighForZone = geoScope === "localisee" && !!geoZone && nationalRefBudget > 0 && spend > localBudgetCeiling;
 
@@ -714,7 +765,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // null si aucun mois de haute saison coché) : signale si la haute saison
   // arrive avant ou après la fin de la phase d'apprentissage (mois 4, cf.
   // LEARNING_STEPS), pour aider à caler le mois de démarrage en conséquence.
-  const firstHighSeasonIdx = seasonalityEnabled
+  const firstHighSeasonIdx = seasonalityEnabled && isNewAccount
     ? Array.from({ length: 12 }, (_, i) => i).find(i => highSeasonMonths[(startMonth + i) % 12]) ?? null
     : null;
   const highSeasonBeforeMaturity = firstHighSeasonIdx != null && firstHighSeasonIdx < 3;
@@ -723,16 +774,29 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     const high = seasonalityEnabled && highSeasonMonths[calMonth];
     const marketCoef = high ? marketMultiplier : 1;
     const budgetCoef = high ? budgetMultiplier : 1;
-    const lm = LEARNING_STEPS[i]?.mult ?? LEARNING_STEPS[LEARNING_STEPS.length - 1].mult; // mult CPL du mois
-    // budget figé → le volume profite du budget investi en plus (× budgetCoef),
-    //   de l'efficacité marché (× marketCoef) et de la baisse de CPL (÷ lm) ;
+    // Compte existant : le CPL saisi est déjà optimisé, pas de montée en charge.
+    const lm = isNewAccount
+      ? (LEARNING_STEPS[i]?.mult ?? LEARNING_STEPS[LEARNING_STEPS.length - 1].mult)
+      : 1;
+    // Effet saisonnier sur le CPL : plus de demande le baisse, plus de concurrence
+    // le monte. Cumulé à la montée en charge, plafonné par MIN_CPL_FACTOR.
+    const seasonCpl = seasonEffect === "cost" ? marketCoef : 1 / marketCoef;
+    const cplFactor = Math.max(MIN_CPL_FACTOR, lm * seasonCpl);
+    // budget figé → le volume suit le budget investi (× budgetCoef) et la baisse
+    //   (ou hausse) de CPL (÷ cplFactor), avec la pression de coût au budget du mois ;
     // objectif figé → la cible de leads suit le budget qu'on choisit d'y mettre
-    //   (× budgetCoef), le marché et l'apprentissage rendent le budget nécessaire
-    //   pour l'atteindre moins élevé (÷ marketCoef, × lm).
-    const mLeads   = mode === "budget" ? leads * budgetCoef * marketCoef / lm : leads * budgetCoef;
+    //   (× budgetCoef), la dépense nécessaire suit le CPL (× cplFactor).
+    let mLeads, mSpend;
+    if (mode === "budget") {
+      const mBudget = spend * budgetCoef;
+      mLeads = leads * pressure * budgetCoef / (pressureOf(mBudget) * cplFactor);
+      mSpend = mBudget;
+    } else {
+      mLeads = leads * budgetCoef;
+      mSpend = spendWithPressure(spend / pressure * budgetCoef * cplFactor);
+    }
     const mClients = biz.hasClosing ? mLeads * closing / 100 : mLeads;
     const mCA      = mClients * clientValue;
-    const mSpend   = mode === "budget" ? spend * budgetCoef : spend * budgetCoef * lm / marketCoef;
     return {
       label: seasonalityEnabled ? MONTH_NAMES[calMonth] : `M${i + 1}`,
       high, marketCoef, budgetCoef,
@@ -853,7 +917,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, haloEnabled, haloRate, prospect, website }));
+    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, haloEnabled, haloRate, prospect, website }));
     // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
     // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
     const linkId = currentLinkId ?? genLinkId();
@@ -1335,6 +1399,46 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                 )}
               </div>
 
+              {/* Réalisme des résultats : compte existant / nouveau, rendements décroissants */}
+              <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
+                <div style={{ ...S.label, color: "rgba(0,0,0,0.4)", marginBottom: 12 }}>Réalisme des résultats</div>
+
+                <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 6 }}>Type de compte</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  {[["new", "Nouveau compte"], ["existing", "Compte existant"]].map(([k, l]) => (
+                    <button key={k} onClick={() => setAccountType(k)} style={segBtnStyle(accountType === k)}>{l}</button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginBottom: 14 }}>
+                  {isNewAccount
+                    ? "La montée en charge est appliquée : le CPL baisse sur les premiers mois (environ -25 % à maturité)."
+                    : "Les chiffres saisis viennent d'un compte déjà optimisé : aucune baisse de CPL supplémentaire n'est appliquée."}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: diminishing ? 10 : 0 }}>
+                  <span style={{ fontSize: 11, color: "rgba(0,0,0,0.55)", fontWeight: 600 }}>Le coût monte avec le budget</span>
+                  <button onClick={() => setDiminishing(v => !v)} title={diminishing ? "Désactiver" : "Activer"}
+                    style={{ width: 38, height: 20, borderRadius: 11, border: "none", cursor: "pointer", flexShrink: 0,
+                      background: diminishing ? accent : "rgba(0,0,0,0.18)", position: "relative", transition: "background .2s" }}>
+                    <span style={{ position: "absolute", top: 3, left: diminishing ? 21 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s", display: "block" }} />
+                  </button>
+                </div>
+                {diminishing && (
+                  <>
+                    <Slider label="Budget de référence (€/mois)" value={Math.min(Math.max(Math.round(refBudget / 100) * 100, 100), 30000)} min={100} max={30000}
+                      step={100} onChange={setRefBudgetOverride} accent={accent} display={`${Math.round(refBudget).toLocaleString("fr-FR")} €`} />
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4 }}>
+                      Budget auquel le CPC / CPL saisi est réaliste. Au-delà, les derniers leads coûtent plus cher (+15 % de coût unitaire à chaque multiplication du budget par ~2,7, plafonné à ×2,5). Hypothèse à recaler sur des comptes réels.
+                      {refBudgetOverride != null && (
+                        <button onClick={() => setRefBudgetOverride(null)} style={{ marginLeft: 6, background: "none", border: "none", color: accent, fontSize: 10, cursor: "pointer", textDecoration: "underline", padding: 0 }}>
+                          revenir à l'automatique
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
               {/* Saisonnalité */}
               <div style={{ marginTop: 14, background: "rgba(0,0,0,0.04)", borderRadius: 11, padding: 16, border: "1px solid rgba(0,0,0,0.08)" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: seasonalityEnabled ? 14 : 0 }}>
@@ -1375,11 +1479,22 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                       ))}
                     </div>
 
+                    {/* Effet de la haute saison sur le CPL */}
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 6 }}>Effet de la haute saison sur le {biz.cplShort}</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+                      {[["demand", `Demande forte (${biz.cplShort} baisse)`], ["cost", `Concurrence (${biz.cplShort} monte)`]].map(([k, l]) => (
+                        <button key={k} onClick={() => setSeasonEffect(k)} style={segBtnStyle(seasonEffect === k)}>{l}</button>
+                      ))}
+                    </div>
+
                     {/* Coefficient marché */}
-                    <Slider label="Coefficient marché (demande)" value={marketMultiplier} min={1} max={6}
+                    <Slider label={seasonEffect === "cost" ? `Coefficient de coût (${biz.cplShort} en haute saison)` : "Coefficient marché (demande)"} value={marketMultiplier} min={1} max={6}
                       step={0.5} onChange={setMarketMultiplier} accent={accent} display={`×${marketMultiplier.toFixed(1)}`} />
                     <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: -4, marginBottom: 14 }}>
-                      À quel point le marché est plus gros en haute saison (plus de recherches, CPL plus bas). N'augmente pas le budget à lui seul.
+                      {seasonEffect === "cost"
+                        ? `En haute saison le ${biz.cplShort} est multiplié par ce coefficient (enchères plus disputées, demande moins qualifiée). À caler sur l'historique du compte.`
+                        : `À quel point le marché est plus gros en haute saison (plus de recherches, ${biz.cplShort} plus bas). N'augmente pas le budget à lui seul.`}
+                      {` Cumulé à la montée en charge, le ${biz.cplShort} ne descend jamais sous ${Math.round(MIN_CPL_FACTOR * 100)} % du ${biz.cplShort} de départ.`}
                     </div>
 
                     {/* Coefficient budget */}
@@ -1522,7 +1637,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
               return <ConversionFunnel stages={fStages} rates={fRates} />;
             })()}
             {/* CPL/CPA par mois d'apprentissage */}
-            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+            <div style={{ display: isNewAccount ? "flex" : "none", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
               {learningTable.map(r => (
                 <div key={r.label} style={{ flex: 1, minWidth: 80, background: G2, borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
                   <div style={{ color: "#5a7a6a", fontSize: 10, marginBottom: 2 }}>{biz.cplShort} {r.label}</div>
@@ -1607,7 +1722,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
           )}
 
               {/* Courbe d'apprentissage — évolution du CPL sur les premiers mois */}
+              {(isNewAccount || lowSignal || pressure > 1.005) && (
               <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
+                {isNewAccount && (<>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6 }}>
                   <div style={{ fontFamily: "'Manrope',sans-serif", fontWeight: 700, fontSize: 13, color: "#F6F1E8" }}>
                     Courbe d'apprentissage
@@ -1644,6 +1761,16 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     La phase d'apprentissage algorithmique dure ~5 à 12 semaines. Les gains de {biz.cplShort} des premiers mois viennent surtout de l'optimisation continue (mots-clés, audiences, créas) et se stabilisent autour de −25 % à maturité.
                   </span>
                 </div>
+                </>)}
+                {/* Rendements décroissants : coût unitaire majoré par le niveau de budget */}
+                {pressure > 1.005 && (
+                  <div style={{ marginTop: 10, padding: "10px 12px", background: accent + "14", borderRadius: 8, border: `1px solid ${accent}33`, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <span style={{ color: accent, fontSize: 12, lineHeight: 1.4 }}>ⓘ</span>
+                    <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
+                      À {fmtC(spend)}/mois, au-dessus du budget de référence ({fmtC(refBudget)}), le coût unitaire est majoré de {Math.round((pressure - 1) * 100)} % : les derniers {biz.conversionStage.toLowerCase()} coûtent plus cher que les premiers.
+                    </span>
+                  </div>
+                )}
                 {/* Garde-fou : signal insuffisant pour l'algorithme */}
                 {lowSignal && (
                   <div style={{ marginTop: 10, padding: "10px 12px", background: "#a6402a22", borderRadius: 8, border: "1px solid #a6402a66", display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -1654,6 +1781,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                   </div>
                 )}
               </div>
+              )}
 
               {/* Projection sur 12 mois — pondérée par la saisonnalité */}
               <div style={{ marginTop: 14, background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.06)", padding: "20px 22px" }}>
