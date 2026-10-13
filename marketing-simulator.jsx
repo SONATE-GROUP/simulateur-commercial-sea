@@ -20,6 +20,7 @@ const CFG = {
       cpmDigits: 1,
       cpmDefault: 30,
       showCtr: true,
+      searchBased: true, // enchères au clic sur requête : le CPM n'est pas un repère
     },
     "meta-ads": {
       label: "Meta Ads",
@@ -645,18 +646,6 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   // Seuil de rentabilité : ROAS minimal pour que la marge couvre la dépense.
   const breakEvenRoas = effectiveMarge > 0 ? 100 / effectiveMarge : Infinity;
 
-  // ROI à maturité : le ROI net ci-dessus reflète le CPL du mois 1 (réglages
-  // actuels) ; celui-ci projette le même budget/objectif une fois le CPL
-  // stabilisé au palier d'apprentissage (LEARNING_STEPS[3] = mois 4), pour voir
-  // d'un coup d'œil l'écart entre "aujourd'hui" et "une fois l'algorithme optimisé".
-  const matureLm      = LEARNING_STEPS[3].mult;
-  const matureLeads   = mode === "budget" ? leads / matureLm : leads;
-  const matureSpend   = mode === "budget" ? spend : spend * matureLm;
-  const matureClients = biz.hasClosing ? matureLeads * closing / 100 : matureLeads;
-  const matureCA      = matureClients * clientValue;
-  const matureProfit  = matureCA * effectiveMarge / 100 - matureSpend;
-  const matureRoiPct  = matureSpend > 0 ? (matureProfit / matureSpend) * 100 : 0;
-
   // Effet halo (branding) : parmi les clics qui n'ont pas converti tout de
   // suite, une part revient plus tard via une recherche de marque ou la fiche
   // Google (GMB), en dehors du tracking SEA direct. Estimation à part : ne
@@ -1214,7 +1203,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     mode non sélectionné pour éviter un trio incohérent. En CPL,
                     le CPC implicite permet de vérifier que le coût constaté
                     reste cohérent avec le CTR/la conversion saisis. */}
-                {ch.showCtr && (
+                {ch.showCtr && !(ch.searchBased && billing === "cpc") && (
                   <div style={{ fontSize: 10, color: "rgba(0,0,0,0.4)", marginTop: -4, marginBottom: 14 }}>
                     {billing === "cpc"
                       ? `≈ CPM ${(cpc * ctr * 10).toFixed(1)} € à ce CTR`
@@ -1463,17 +1452,20 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
             <div style={{ flex: 1, display: "flex", gap: 10 }}>
               <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${G3}` }}>
                 <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROAS</div>
-                <div style={{ color: CREAM, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>×{roas.toFixed(1)}</div>
-                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>{recurring ? "valeur vie / 1 € investi (LTV:CAC)" : "CA pour 1 € investi"}</div>
-              </div>
-              <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${roiPct >= 0 ? G3 : "#a6402a"}` }}>
-                <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROI net</div>
-                <div style={{ color: roiPct >= 0 ? "#4caf50" : ORANGE, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{roiPct >= 0 ? "+" : ""}{Math.round(roiPct)}%</div>
-                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
-                  {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {roiPct >= 0 ? "rentable" : "non rentable"}
+                <div style={{ color: CREAM, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>×{annualRoas.toFixed(1)}</div>
+                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>{recurring ? "valeur vie / 1 € investi (LTV:CAC)" : "CA pour 1 € investi"} · sur 12 mois</div>
+                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="Mois 1 : CPL de départ, sans montée en charge ni saisonnalité">
+                  mois 1 : ×{roas.toFixed(1)}
                 </div>
-                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="ROI net une fois le CPL stabilisé au palier d'apprentissage (mois 4), à budget/objectif constant">
-                  ≈ {matureRoiPct >= 0 ? "+" : ""}{Math.round(matureRoiPct)}% à maturité (mois 4+)
+              </div>
+              <div style={{ flex: 1, backgroundColor: G5, borderRadius: 12, padding: "24px 22px", border: `1px solid ${annualRoiPct >= 0 ? G3 : "#a6402a"}` }}>
+                <div style={{ color: "#7a9e8e", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>ROI net</div>
+                <div style={{ color: annualRoiPct >= 0 ? "#4caf50" : ORANGE, fontSize: 40, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{annualRoiPct >= 0 ? "+" : ""}{Math.round(annualRoiPct)}%</div>
+                <div style={{ color: "#5a7a6a", fontSize: 12, marginTop: 8 }}>
+                  {margeEnabled ? `après marge ${Math.round(marge)}%` : "sur CA brut, marge non appliquée"} · {annualRoiPct >= 0 ? "rentable" : "non rentable"} · sur 12 mois
+                </div>
+                <div style={{ color: accent, fontSize: 11, fontWeight: 600, marginTop: 4 }} title="Mois 1 : CPL de départ, sans montée en charge ni saisonnalité">
+                  mois 1 : {roiPct >= 0 ? "+" : ""}{Math.round(roiPct)}%
                 </div>
               </div>
             </div>
@@ -1682,9 +1674,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     const h = Math.max((m.leads / maxMonthLeads) * 100, 2);
                     return (
                       <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                        {m.high && (
-                          <div style={{ fontSize: 8, fontWeight: 700, color: accent, marginBottom: 3 }}>{Math.round(m.leads).toLocaleString("fr-FR")}</div>
-                        )}
+                        <div style={{ fontSize: 8, fontWeight: m.high ? 700 : 400, color: m.high ? accent : "rgba(255,255,255,0.4)", marginBottom: 3 }}>{Math.round(m.leads).toLocaleString("fr-FR")}</div>
                         <div style={{ width: "100%", height: `${h}%`, minHeight: 2, borderRadius: "3px 3px 0 0",
                           background: m.high ? accent : accent + "55", transition: "height .4s cubic-bezier(0.34,1.56,0.64,1)" }} />
                         <div style={{ fontSize: 8.5, color: m.high ? accent : "rgba(255,255,255,0.4)", fontWeight: m.high ? 700 : 400, marginTop: 5 }}>{m.label}</div>

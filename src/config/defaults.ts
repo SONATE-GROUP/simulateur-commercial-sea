@@ -308,7 +308,11 @@ export const CONTACT_TYPES = {
 // départ à ajuster au cas par cas.
 export const CONTACT_SPLIT_DEFAULTS = {
   urgence: { appel_annonce: 55, appel_site: 35, formulaire: 10, rdv: 0, chat: 0 },
-  lead: { appel_annonce: 14, appel_site: 35, rdv: 51, formulaire: 0, chat: 0 },
+  // Lead : le formulaire est le contact principal en lead gen (retour Rénoouest :
+  // 80 % formulaire / 20 % appel). Poids 40 + les 14/35/51 du dossier réel
+  // ramenés à 60 %, ce qui donne ~83/17 formulaire/appel_annonce quand seuls
+  // ces deux types sont sélectionnés. Hypothèse à affiner avec d'autres comptes.
+  lead: { formulaire: 40, appel_annonce: 8, appel_site: 21, rdv: 31, chat: 0 },
   ecommerce: { achat: 85, clickcollect: 10, appel_site: 5, appel_annonce: 0 },
 };
 
