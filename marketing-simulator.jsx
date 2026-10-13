@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit, getDefaultsSource } from "./src/config/defaults";
+import { parseGoogleAdsExport, aggregateCampaigns, decodeExport } from "./src/googleAdsImport";
 import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
 
 const CFG = {
@@ -407,6 +408,10 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
   const [impressionShare, setImpressionShare] = useState(80); // part des recherches réellement atteignable (%)
   const [lostBudgetShare, setLostBudgetShare] = useState(null); // % d'impressions perdues faute de budget (optionnel)
   const [volumePasteError, setVolumePasteError] = useState(false);
+  // Import d'un export de campagnes Google Ads : aperçu avant application.
+  const [gaImport, setGaImport] = useState(null); // { fileName, campaigns, selected, months, monthsDetected, hasConv }
+  const [gaError, setGaError]   = useState("");
+  const [gaApplied, setGaApplied] = useState("");
   const [refBudgetOverride, setRefBudgetOverride] = useState(null); // null = automatique
   const [budgetMultiplier, setBudgetMultiplier] = useState(1);
   const [prospect, setProspect] = useState("");
@@ -442,6 +447,43 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     }
     setVolumePasteError(false);
     setSearchVolumes(nums.slice(0, 12).map(Math.round));
+  };
+  const onGaFile = async (file) => {
+    setGaError(""); setGaApplied("");
+    if (!file) return;
+    try {
+      const parsed = parseGoogleAdsExport(decodeExport(await file.arrayBuffer()));
+      if (parsed.error) { setGaImport(null); setGaError(parsed.error); return; }
+      setGaImport({
+        fileName: file.name, campaigns: parsed.campaigns, selected: parsed.campaigns.map(() => true),
+        months: parsed.months ?? 1, monthsDetected: parsed.months != null, hasConv: parsed.hasConv,
+      });
+    } catch (_) {
+      setGaImport(null); setGaError("Impossible de lire ce fichier.");
+    }
+  };
+  const gaAgg = gaImport
+    ? aggregateCampaigns(gaImport.campaigns.filter((_, i) => gaImport.selected[i]), gaImport.months)
+    : null;
+  const applyGaImport = () => {
+    if (!gaAgg || gaAgg.clicks <= 0) return;
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const monthly = Math.round(gaAgg.monthlyBudget);
+    setMode("budget");
+    setBilling("cpc");
+    setBudget(clamp(monthly, 100, 50000));
+    setCpc(clamp(r2(gaAgg.cpc), 0.1, ch.cpcMax ?? 20));
+    if (gaAgg.ctr != null) setCtr(clamp(r2(gaAgg.ctr), 0.1, ch.ctrMax ?? 15));
+    if (gaAgg.convRate != null) setConv(clamp(r2(gaAgg.convRate), 0.1, 20));
+    if (gaAgg.cpl != null) setCplTarget(clamp(Math.round(gaAgg.cpl), 1, 1000));
+    if (gaAgg.lostBudget != null) setLostBudgetShare(Math.round(gaAgg.lostBudget));
+    // Chiffres d'un compte qui tourne : pas de montée en charge, et le CPC observé
+    // vaut pour le budget réellement dépensé.
+    setAccountType("existing");
+    setRefBudgetOverride(clamp(monthly, 100, 30000));
+    setGaApplied(`${gaImport.fileName} : ${gaImport.selected.filter(Boolean).length} campagne(s), ${Math.round(gaAgg.monthlyBudget).toLocaleString("fr-FR")} €/mois.`);
+    setGaImport(null);
   };
   const segBtnStyle = (active) => ({
     flex: 1, padding: "6px 6px", borderRadius: 6, fontSize: 11, fontWeight: active ? 700 : 500, cursor: "pointer",
@@ -1301,6 +1343,65 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                     </div>
                   );
                 })()}
+
+                {/* Import d'un export Google Ads : remplit CPC, CTR, conversion et budget */}
+                {channel === "google-ads" && (
+                  <div style={{ marginBottom: 14 }}>
+                    <label style={{ display: "block", textAlign: "center", padding: "8px 10px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600,
+                      border: `1px dashed ${accent}`, color: accent, background: accent + "0d" }}>
+                      Importer un export Google Ads (CSV)
+                      <input type="file" accept=".csv,.tsv,.txt" style={{ display: "none" }}
+                        onChange={e => { onGaFile(e.target.files?.[0]); e.target.value = ""; }} />
+                    </label>
+                    <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: 4 }}>
+                      Rapport « Campagnes » avec Impr., Clics, Coût et Conversions, sur la période de votre choix. Le fichier est lu dans votre navigateur et n'est pas envoyé.
+                    </div>
+                    {gaError && <div style={{ fontSize: 10.5, color: "#a6402a", marginTop: 6 }}>{gaError}</div>}
+                    {gaApplied && !gaImport && (
+                      <div style={{ fontSize: 10.5, color: "#2f7a46", marginTop: 6 }}>Import appliqué : {gaApplied} Compte réglé sur « existant ».</div>
+                    )}
+                    {gaImport && gaAgg && (
+                      <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: "rgba(255,255,255,0.7)", border: "1px solid rgba(0,0,0,0.12)" }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#0F332B", marginBottom: 6 }}>{gaImport.fileName}</div>
+                        <div style={{ maxHeight: 120, overflowY: "auto", marginBottom: 8 }}>
+                          {gaImport.campaigns.map((c, i) => (
+                            <label key={i} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10.5, color: "rgba(0,0,0,0.6)", padding: "2px 0" }}>
+                              <input type="checkbox" checked={gaImport.selected[i]}
+                                onChange={() => setGaImport(g => ({ ...g, selected: g.selected.map((v, j) => (j === i ? !v : v)) }))} />
+                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                              <span style={{ color: "rgba(0,0,0,0.4)" }}>{Math.round(c.cost).toLocaleString("fr-FR")} €</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 10, color: "rgba(0,0,0,0.45)", marginBottom: 4 }}>
+                          Nombre de mois couverts{gaImport.monthsDetected ? " (détecté)" : " (non détecté, à vérifier)"}
+                        </div>
+                        <input type="number" min={0.1} step={0.5} value={gaImport.months}
+                          onChange={e => setGaImport(g => ({ ...g, months: Math.max(0.1, Number(e.target.value) || 1) }))}
+                          style={{ width: "100%", boxSizing: "border-box", backgroundColor: "rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.12)", borderRadius: 6, padding: "5px 6px", fontSize: 11, marginBottom: 8, fontFamily: "'DM Sans',sans-serif" }} />
+                        <div style={{ fontSize: 10.5, color: "rgba(0,0,0,0.6)", lineHeight: 1.6, marginBottom: 8 }}>
+                          Budget {Math.round(gaAgg.monthlyBudget).toLocaleString("fr-FR")} €/mois
+                          {gaAgg.cpc != null && <> · CPC {gaAgg.cpc.toFixed(2)} €</>}
+                          {gaAgg.ctr != null && <> · CTR {gaAgg.ctr.toFixed(1)} %</>}
+                          {gaAgg.convRate != null && <> · conversion {gaAgg.convRate.toFixed(1)} %</>}
+                          {gaAgg.cpl != null && <> · coût par conversion {Math.round(gaAgg.cpl)} €</>}
+                          {gaAgg.lostBudget != null && <> · {Math.round(gaAgg.lostBudget)} % d'impressions perdues (budget)</>}
+                          {!gaImport.hasConv && <div style={{ color: "#a6402a" }}>Pas de colonne Conversions : le taux de conversion n'est pas modifié.</div>}
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={applyGaImport} disabled={gaAgg.clicks <= 0}
+                            style={{ flex: 1, padding: "7px 6px", borderRadius: 6, border: "none", background: accent, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: gaAgg.clicks > 0 ? 1 : 0.4 }}>
+                            Appliquer
+                          </button>
+                          <button onClick={() => setGaImport(null)}
+                            style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.15)", background: "transparent", color: "rgba(0,0,0,0.5)", fontSize: 11, cursor: "pointer" }}>
+                            Annuler
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Mode de facturation */}
                 <div style={{ marginBottom: 14 }}>
