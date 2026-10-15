@@ -37,3 +37,27 @@ export function fmtDateShort(iso) {
     return new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
   } catch { return iso; }
 }
+
+// État du simulateur ⇄ texte base64 du lien partagé (`?s=`).
+// Encodé en UTF-8 : `btoa` seul plantait sur un caractère hors Latin-1
+// (apostrophe typographique, « œ », emoji) dans le nom d'un prospect.
+// Le décodage lit aussi les anciens liens, encodés en Latin-1 : leurs octets
+// accentués ne forment pas de l'UTF-8 valide, et on retombe sur la lecture brute.
+// Les anciens liens n'encodaient pas non plus le base64 dans l'URL : un « + »
+// y revient en espace. Le base64 n'a jamais d'espace, on remet donc le « + ».
+export function encodeState(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let bin = "";
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+
+export function decodeState(str) {
+  const bin = atob(String(str).replace(/ /g, "+"));
+  try {
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return JSON.parse(bin);
+  }
+}

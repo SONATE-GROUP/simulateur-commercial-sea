@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { SECTORS, FRENCH_REGIONS, getRegionPopulationShare, getDefaultValues, getSectorSalesCycle, getSectorMargin, CONVERSION_SUPPORTS, getSupportFactor, BUSINESS_TYPES, CONTACT_TYPES, getDefaultContactSplit, getDefaultsSource } from "./src/config/defaults";
 import { parseGoogleAdsExport, aggregateCampaigns, decodeExport } from "./src/googleAdsImport";
-import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate } from "./src/tracking";
+import { loadTracking, saveTracking, genLinkId, fmtDuration, fmtDate, encodeState, decodeState } from "./src/tracking";
+import { listReports, saveReport, recordVisit } from "./src/lib/reports";
 
 const CFG = {
   channels: {
@@ -540,15 +541,15 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     setMyReportsOpen(true);
     const local = localReports();
     setMyReports(local.length ? local.sort((a, b) => new Date(b.creation) - new Date(a.creation)) : null);
-    fetch("/api/my-reports", { headers: { "X-Requested-With": "fetch" } })
-      .then(r => (r.ok ? r.json() : { reports: [] }))
-      .then(d => {
-        // Le serveur prime pour les rapports qu'il connaît (stats à jour,
-        // visites d'autres personnes, espace réellement assigné) ; les
-        // rapports enregistrés localement mais pas encore en espace restent
+    listReports()
+      .then(reports => {
+        // La base prime pour les rapports qu'elle connaît (stats à jour,
+        // compte réellement assigné) ; « Mes rapports » = ceux dont on est
+        // l'auteur. Les rapports enregistrés depuis ce navigateur restent
         // affichés grâce au suivi local.
         const byId = new Map(local.map(r => [r.id, r]));
-        (d.reports || []).forEach(r => byId.set(r.id, r));
+        reports.filter(r => r.createdById === user?.id)
+          .forEach(r => byId.set(r.id, { ...r, espace: r.internal ? "—" : r.accountName }));
         setMyReports([...byId.values()].sort((a, b) => new Date(b.creation) - new Date(a.creation)));
       })
       .catch(() => { if (!local.length) setMyReports([]); });
@@ -589,7 +590,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     const s = new URLSearchParams(window.location.search).get("s");
     if (!s) return;
     try {
-      const d = JSON.parse(atob(s));
+      const d = decodeState(s);
       if (CFG.channels[d.channel] && CFG.sectors[d.sector]) {
         setChannel(d.channel);
         setSector(d.sector);
@@ -678,7 +679,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
     let label = "Lien partagé";
     try {
-      const d = JSON.parse(atob(encoded));
+      const d = decodeState(encoded);
       if (d.prospect) label = d.prospect;
     } catch (_) {}
 
@@ -693,12 +694,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
     const start = Date.now();
     // Identifiant de visite stable, pour mettre à jour la même visite côté serveur.
     const visitId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    const postVisit = () => {
-      fetch("/api/report-visit", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ linkId, visitId, duration: Math.round((Date.now() - start) / 1000) }),
-      }).catch(() => {});
-    };
+    const postVisit = () => { recordVisit(linkId, visitId, (Date.now() - start) / 1000); };
     const update = () => {
       const s = loadTracking();
       const v = s[linkId]?.visits?.[visitIndex];
@@ -1040,12 +1036,12 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
   // ── Share ─────────────────────────────────────────────────
   const handleShare = async () => {
-    const encoded = btoa(JSON.stringify({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, qualifEnabled, qualifRate, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, mixItems, mixTargetLeads, haloEnabled, haloRate, prospect, website }));
+    const encoded = encodeState({ channel, sector, mode, budget, tLeads, cpc, ctr, conv, billing, cpm, cplTarget, support, businessType, contactTypes, contactSplit, geoScope, geoZone, panierMoyen, revenueType, mrr, lifetime, marge, margeEnabled, closing, qualifEnabled, qualifRate, cycleVente, seasonalityEnabled, startMonth, highSeasonMonths, marketMultiplier, budgetMultiplier, seasonEffect, accountType, diminishing, refBudgetOverride, searchVolumes, impressionShare, lostBudgetShare, mixItems, mixTargetLeads, haloEnabled, haloRate, prospect, website });
     // Réutilise l'identifiant déjà généré dans cette session : ré-enregistrer
     // met à jour le même rapport au lieu d'en créer un doublon à chaque clic.
     const linkId = currentLinkId ?? genLinkId();
     if (!currentLinkId) setCurrentLinkId(linkId);
-    const url = `${window.location.origin}/?s=${encoded}&t=${linkId}`;
+    const url = `${window.location.origin}/?s=${encodeURIComponent(encoded)}&t=${linkId}`;
     // Référence le lien dans le suivi local pour pouvoir consulter ses statistiques
     // ; préserve les visites déjà enregistrées et l'espace déjà assigné.
     const store = loadTracking();
@@ -1059,13 +1055,11 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
       visits: existing?.visits || [],
     };
     saveTracking(store);
-    // Enregistre aussi le rapport côté serveur (back-office multi-poste).
-    // espace omis (pas ecrase) : un re-enregistrement ne doit pas annuler un
-    // rangement dans un espace deja fait depuis le back-office.
-    fetch("/api/report", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ linkId, label: prospect || "Sans nom", website: website || "", state: encoded }),
-    }).catch(() => {});
+    // Enregistre aussi le rapport dans Ma Sonate (back-office multi-poste). Le
+    // compte n'est pas envoyé : un re-enregistrement ne doit pas annuler un
+    // rattachement fait depuis le back-office (et la base le refuserait).
+    saveReport({ id: linkId, label: prospect || "Sans nom", website: website || "", state: encoded })
+      .catch(err => window.alert(`Le lien est copié, mais le rapport n'a pas pu être enregistré : ${err.message || err}`));
     setShareUrl(url);
     try { await navigator.clipboard.writeText(url); } catch (_) {}
     setCopied(true);
@@ -2250,7 +2244,7 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
                           {r.espace && r.espace !== "—" ? `${r.espace} · ` : ""}{r.vues || 0} vue{r.vues > 1 ? "s" : ""}{r.temps ? ` · ${fmtDuration(r.temps)}` : ""}
                         </div>
                       </div>
-                      <button onClick={() => { if (r.state) window.location.href = `${window.location.origin}/?s=${r.state}`; }}
+                      <button onClick={() => { if (r.state) window.location.href = `${window.location.origin}/?s=${encodeURIComponent(r.state)}`; }}
                         disabled={!r.state}
                         style={{ ...hOutBtn, flexShrink: 0, opacity: r.state ? 1 : 0.4, cursor: r.state ? "pointer" : "default", color: CREAM, borderColor: G3, background: "rgba(255,255,255,0.06)" }}>
                         Ouvrir
