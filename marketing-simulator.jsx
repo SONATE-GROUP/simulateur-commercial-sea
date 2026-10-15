@@ -348,6 +348,9 @@ const SEASON_PRESETS = {
 };
 
 // ─── App ─────────────────────────────────────────────────────
+// Une consultation de lien partagé = un chargement de page.
+const PAGE_VISIT_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 export default function Simulator({ onOpenBackOffice, user, onLogout, consultation }) {
   const [channel, setChannel] = useState("google-ads");
   const [sector, setSector]   = useState("saas");
@@ -693,7 +696,9 @@ export default function Simulator({ onOpenBackOffice, user, onLogout, consultati
 
     const start = Date.now();
     // Identifiant de visite stable, pour mettre à jour la même visite côté serveur.
-    const visitId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    // Tiré une fois par chargement de page (PAGE_VISIT_ID) : le mode strict de
+    // React monte l'effet deux fois en développement, ce qui comptait deux visites.
+    const visitId = PAGE_VISIT_ID;
     const postVisit = () => { recordVisit(linkId, visitId, (Date.now() - start) / 1000); };
     const update = () => {
       const s = loadTracking();
